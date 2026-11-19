@@ -1,0 +1,13 @@
+{
+  "name": "Table Games",
+  "short_name": "Table Games",
+  "description": "Card games across everyone's phones, no internet needed.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#143628",
+  "theme_color": "#1d4a37",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
