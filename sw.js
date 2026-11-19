@@ -1,6 +1,6 @@
 // sw.js — saves the app on the phone so it opens with no internet.
 // When you change any file, bump VERSION so phones pick up the update.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const FILES = [
   './',
   'index.html',
@@ -15,6 +15,10 @@ const FILES = [
   'vendor/jsQR.js',
   'manifest.webmanifest',
   'icon.svg',
+  'icon-180.png',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-512.png',
 ];
 
 self.addEventListener('install', (e) => {
