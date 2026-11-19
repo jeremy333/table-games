@@ -1,6 +1,6 @@
 // sw.js — saves the app on the phone so it opens with no internet.
 // When you change any file, bump VERSION so phones pick up the update.
-const VERSION = 'v2';
+const VERSION = 'v4';
 const FILES = [
   './',
   'index.html',
@@ -11,6 +11,8 @@ const FILES = [
   'js/cards.js',
   'games/index.js',
   'games/crazy-eights.js',
+  'games/rook.js',
+  'games/homestead.js',
   'vendor/qrcode.mjs',
   'vendor/jsQR.js',
   'manifest.webmanifest',

@@ -91,15 +91,41 @@ function bufferChannel(channel) {
   return channel;
 }
 
+// Browsers hide a phone's real network address behind a private ".local" name
+// unless the camera is in use. Some hotspots can't resolve those names, so when
+// camera access is already allowed we open it for a moment while gathering.
+async function withAddressBoost(boost, fn) {
+  let stream = null;
+  if (boost) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch { stream = null; }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+  }
+}
+
+// 'direct' = real address shared (connects on most hotspots); 'private' = .local name only.
+export function addressKind(sdp) {
+  const cands = sdp.split('\r\n').filter((l) => l.startsWith('a=candidate'));
+  if (!cands.length) return 'none';
+  return cands.some((l) => !/\.local /.test(l)) ? 'direct' : 'private';
+}
+
 // Host: make an invite for one player.
-export async function createInvite() {
+export async function createInvite({ boost = false } = {}) {
   const pc = new RTCPeerConnection(RTC_CONFIG);
   const channel = bufferChannel(pc.createDataChannel('table', { ordered: true }));
-  await pc.setLocalDescription(await pc.createOffer());
-  await waitForIce(pc);
+  await withAddressBoost(boost, async () => {
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitForIce(pc);
+  });
   const id = Math.random().toString(36).slice(2, 8);
   const code = await encodeSignal({ i: id, s: slimSdp(pc.localDescription.sdp) });
-  return { id, pc, channel, code, link: baseUrl() + '#join=' + code };
+  return { id, pc, channel, code, link: baseUrl() + '#join=' + code, address: addressKind(pc.localDescription.sdp) };
 }
 
 // Host: finish the link once the guest's reply arrives.
@@ -108,14 +134,16 @@ export async function acceptReply(invite, reply) {
 }
 
 // Guest: answer an invite.
-export async function answerInvite(offer) {
+export async function answerInvite(offer, { boost = false } = {}) {
   const pc = new RTCPeerConnection(RTC_CONFIG);
   const channelReady = new Promise((resolve) =>
     pc.addEventListener('datachannel', (e) => resolve(bufferChannel(e.channel)))
   );
   await pc.setRemoteDescription({ type: 'offer', sdp: offer.s });
-  await pc.setLocalDescription(await pc.createAnswer());
-  await waitForIce(pc);
+  await withAddressBoost(boost, async () => {
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitForIce(pc);
+  });
   const code = await encodeSignal({ i: offer.i, s: slimSdp(pc.localDescription.sdp) });
   return { pc, channelReady, code, link: baseUrl() + '#reply=' + code };
 }

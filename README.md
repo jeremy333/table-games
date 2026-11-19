@@ -10,11 +10,12 @@ Everyone opens the link once while they have internet. The page saves itself to 
 
 ## How to play
 
-1. Get everyone on the same Wi‑Fi, or have one phone turn on its hotspot and everyone else join it. (Airplane Wi‑Fi usually blocks phones from seeing each other, so use a hotspot there.)
-2. The host taps **Host a game**, then **Invite a player**.
-3. The player scans the host's QR code with their camera (or opens the texted link) and taps **Join**.
-4. Their phone shows a reply code. The host taps **Scan their reply** and scans it (or opens the reply link the player texted back).
-5. Repeat for each player, then tap **Start**.
+1. The host turns on their phone's hotspot, opens Table Games, and taps **Host a game**.
+2. Under **Hotspot setup**, the host types the hotspot name and password once. The app shows a Wi‑Fi code; others scan it with their camera to join the hotspot. (Airplane Wi‑Fi usually blocks phones from seeing each other, so use a hotspot there.)
+3. Each player scans the host's **join code** (or opens the texted link) and taps **Join**.
+4. Their phone shows a code. The host taps **Scan a player's code** and scans it.
+5. The player appears in the **Joining** box. The host taps **Let in** (or **Let everyone in**).
+6. Pick a game and tap **Start**.
 
 Texting links needs cell service. With no service at all, use the QR codes.
 
@@ -22,7 +23,11 @@ Texting links needs cell service. With no service at all, use the QR codes.
 
 | Game | Players |
 |------|---------|
+| Rook | 4 (two teams of partners) |
 | Crazy Eights | 2–7 |
+| Homestead (deck-building, in the style of Dominion) | 2–4 |
+
+Rook settings (points per hand, play-to score, minimum bid, moon value) are at the top of `games/rook.js`.
 
 Want to add one? See [ADDING-A-GAME.md](ADDING-A-GAME.md).
 
