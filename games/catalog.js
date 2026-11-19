@@ -29,12 +29,12 @@ export const CATALOG = [
     tags: ['cards', 'shedding', 'family', 'quick', 'easy'],
   },
   {
-    id: 'homestead',
-    file: 'homestead.js',
-    name: 'Homestead',
+    id: 'domination',
+    file: 'domination.js',
+    name: 'Domination',
     min: 2,
     max: 4,
-    blurb: 'Build your deck from a shared supply in this Dominion-style game.',
-    tags: ['deck-building', 'dominion', 'strategy', 'cards'],
+    blurb: 'Build your deck from a shared supply: 26 kingdom cards, 10 per game.',
+    tags: ['deck-building', 'dominion', 'strategy', 'cards', 'kingdom'],
   },
 ];

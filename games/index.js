@@ -3,12 +3,12 @@
 // so a phone that hasn't updated yet still starts; it can be ignored otherwise.
 import rook from './rook.js';
 import crazyEights from './crazy-eights.js';
-import homestead from './homestead.js';
+import domination from './domination.js';
 
 export const GAMES = [
   { ...rook, id: 'rook', name: 'Rook' },
   { ...crazyEights, id: 'crazy-eights', name: 'Crazy Eights' },
-  { ...homestead, id: 'homestead', name: 'Homestead' },
+  { ...domination, id: 'domination', name: 'Domination' },
 ];
 
 export function getGame(id) {

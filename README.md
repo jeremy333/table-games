@@ -24,7 +24,7 @@ Everyone opens the link once while they have internet. The page saves itself to 
 |------|---------|
 | Rook | 4 (two teams of partners) |
 | Crazy Eights | 2–7 |
-| Homestead (deck-building, in the style of Dominion) | 2–4 |
+| Domination (deck-building; card-for-card with the classic base game, renamed) | 2–4 |
 
 Pick a game in the lobby by searching its name, a tag (like "cards" or "partners"), or a player count (like "4"). Rook settings are chosen in the lobby: set partners or pick partner (the bidder calls a card), the Rook card's rank (high, 10½, or low), whether the last trick is worth 20, the moon's value, and the play-to score.
 
