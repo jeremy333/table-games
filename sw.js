@@ -2,7 +2,7 @@
 // Core files are saved automatically. Games are saved separately when someone
 // opens or downloads them (see js/library.js), so adding a game never needs a
 // change here. When you change a core file, bump VERSION.
-const VERSION = 'v7';
+const VERSION = 'v8';
 const GAME_CACHE = 'tg-games'; // kept across versions
 const CORE = [
   './',
@@ -26,7 +26,10 @@ const CORE = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
+  // 'reload' skips the browser's own cache so a new version never saves old files.
+  e.waitUntil(caches.open(VERSION)
+    .then((c) => c.addAll(CORE.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -42,7 +45,8 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) return;
   e.respondWith((async () => {
     try {
-      const res = await fetch(e.request);
+      // 'no-cache' checks with the site every time, so old and new files never mix.
+      const res = await fetch(e.request, { cache: 'no-cache' });
       if (res.ok) {
         const copy = res.clone();
         const games = await caches.open(GAME_CACHE);

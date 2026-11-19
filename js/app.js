@@ -1044,3 +1044,4 @@ if ('serviceWorker' in navigator) {
 }
 
 route();
+window.__tgStarted = true;
