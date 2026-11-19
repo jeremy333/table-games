@@ -3,8 +3,14 @@
 import {
   createInvite, acceptReply, answerInvite, decodeSignal, extractCode, wrapChannel, whenOpen,
 } from './net.js';
+import { openOnlineTable, joinOnlineTable, extractHostId } from './net.js';
 import { qrSvg, startScanner } from './qr.js';
-import { GAMES, getGame } from '../games/index.js';
+import {
+  CATALOG, catalogEntry, playersText, searchGames, loadGame, getLoadedGame, gameSource,
+  loadGameFromSource, isDownloaded, downloadGame, removeDownload,
+} from './library.js';
+
+const getGame = getLoadedGame;
 
 const root = document.getElementById('app');
 const bc = 'BroadcastChannel' in window ? new BroadcastChannel('table-games') : null;
@@ -137,20 +143,83 @@ function showHome() {
     nameField(),
     h('div', { class: 'stack' },
       h('button', { class: 'primary big', onclick: () => { if (!needName()) startHosting(); } }, 'Host a game'),
-      h('button', { class: 'big', onclick: () => { if (!needName()) showJoinScan(); } }, 'Join a game')),
+      h('button', { class: 'big', onclick: () => { if (!needName()) showJoinScan(); } }, 'Join a game'),
+      h('button', { class: 'quiet', onclick: showLibrary }, 'Games & offline downloads')),
     h('p', { class: 'note' },
-      'Before you go offline, everyone should open this page once so their phone saves it.'),
+      'Going somewhere without internet? Open Games & offline downloads first and save the games you want.'),
   );
+}
+
+// ---------- games library (search + offline downloads) ----------
+
+function showLibrary() {
+  const input = h('input', {
+    type: 'search', placeholder: 'Search games, or type a player count', 'aria-label': 'Search games',
+    oninput: () => renderLibrary(),
+  });
+  const allBtn = h('button', { class: 'primary big', id: 'download-all', onclick: downloadAll }, 'Download all games');
+  screen(
+    h('button', { class: 'back', onclick: showHome }, '‹ Back'),
+    h('h2', {}, 'Games'),
+    h('p', { class: 'note' }, 'Downloaded games work with no internet. Games you open are saved automatically too.'),
+    allBtn,
+    h('div', { class: 'game-picker' }, input, h('div', { class: 'game-list', id: 'library-list' })),
+  );
+  renderLibrary();
+}
+
+async function renderLibrary() {
+  const list = document.getElementById('library-list');
+  if (!list) return;
+  const q = list.previousElementSibling.value.trim();
+  const results = searchGames(q);
+  const saved = await Promise.all(results.map((g) => isDownloaded(g.id)));
+  const allSaved = (await Promise.all(CATALOG.map((g) => isDownloaded(g.id)))).every(Boolean);
+  if (!document.getElementById('library-list')) return;
+  const allBtn = document.getElementById('download-all');
+  allBtn.disabled = allSaved;
+  allBtn.textContent = allSaved ? 'All games downloaded' : 'Download all games';
+  list.replaceChildren(...(results.length ? results.map((g, i) => {
+    const action = saved[i]
+      ? h('button', { class: 'quiet', onclick: async () => { await removeDownload(g.id); renderLibrary(); } }, 'Remove')
+      : h('button', {
+        onclick: async (e) => {
+          e.target.disabled = true;
+          e.target.textContent = 'Downloading…';
+          try { await downloadGame(g.id); toast(`${g.name} saved for offline`); } catch { toast(`Couldn’t download ${g.name}. Check your internet.`); }
+          renderLibrary();
+        },
+      }, 'Download');
+    return h('div', { class: 'game-option static' },
+      h('span', { class: 'game-name' }, g.name),
+      h('span', { class: 'game-meta' }, playersText(g) + (saved[i] ? ' · saved offline' : '')),
+      h('span', { class: 'game-blurb' }, g.blurb || ''),
+      h('div', { class: 'game-action' }, action));
+  }) : [h('p', { class: 'note' }, `No games match “${q}”.`)]));
+}
+
+async function downloadAll() {
+  const btn = document.getElementById('download-all');
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  let failed = 0;
+  for (const g of CATALOG) {
+    try { await downloadGame(g.id); } catch { failed++; }
+  }
+  toast(failed ? `${failed} game${failed > 1 ? 's' : ''} couldn’t download. Check your internet.` : 'All games saved for offline');
+  renderLibrary();
 }
 
 function showJoinScan() {
   screen(
     h('button', { class: 'back', onclick: showHome }, '‹ Back'),
     h('h2', {}, 'Join a game'),
-    h('p', {}, 'First join the host’s hotspot. Then scan the join code on the host’s phone, or open the link they texted you.'),
-    scanOrPaste('Scan host’s code', (text) => {
+    h('p', {}, 'First join the host’s Wi‑Fi (scan their Wi‑Fi code). Then scan their game code, or open the link they texted you.'),
+    scanOrPaste('Scan host’s game code', (text) => {
+      const hostId = extractHostId(text);
+      if (hostId) return joinOnline(hostId);
       const code = extractCode(text, 'join');
-      if (!code) return toast('That isn’t a join code.');
+      if (!code) return toast('That isn’t a game code.');
       joinWithCode(code);
     }),
   );
@@ -197,56 +266,110 @@ function hotspotBox() {
 
 // ---------- host ----------
 
-// Ask for the camera up front: it's needed to scan players' codes, and while it's
-// allowed, phones share real network addresses, which connect better on hotspots.
-async function startHosting() {
-  let granted = false;
-  try {
-    granted = (await navigator.permissions.query({ name: 'camera' })).state === 'granted';
-  } catch { /* not supported (e.g. some iPhones) */ }
-  if (granted || app.camOK) {
-    app.camOK = true;
-    return openTable();
-  }
-  screen(
-    h('button', { class: 'back', onclick: showHome }, '‹ Back'),
-    h('h2', {}, 'Allow the camera'),
-    h('p', {}, 'You’ll scan each player’s code to let them in. Allowing the camera now also helps phones connect on a hotspot.'),
-    h('div', { class: 'stack' },
-      h('button', {
-        class: 'primary big',
-        onclick: async () => {
-          try {
-            const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            s.getTracks().forEach((t) => t.stop());
-            app.camOK = true;
-          } catch {
-            toast('Camera not allowed. You can still paste codes.');
-          }
-          openTable();
-        },
-      }, 'Allow camera'),
-      h('button', { class: 'quiet', onclick: openTable }, 'Skip for now')),
-  );
-}
-
-function openTable() {
+function startHosting() {
   app.host = {
     players: [{ name: app.name, conn: null }],
     joining: [],          // people connecting, waiting to be let in
-    invites: new Map(),   // open join codes by id
+    mode: 'checking',     // 'online' = one scan; 'offline' = scan each player's code
+    online: null,         // { link, close } when online
+    invites: new Map(),   // offline join codes by id
     used: new Set(),
-    current: null,        // the join code on screen
+    current: null,        // the offline join code on screen
     making: null,
-    gameId: GAMES[0].id,
+    gameId: localStorage.getItem('tg-last-game') || CATALOG[0].id,
+    options: JSON.parse(localStorage.getItem('tg-options') || '{}'), // per game, remembered
     state: null,
   };
+  if (!catalogEntry(app.host.gameId)) app.host.gameId = CATALOG[0].id;
   keepAwake();
   showLobby();
+  selectGame(app.host.gameId);
+  goOnline();
+}
+
+// Try one-scan joining; if the hotspot has no internet, switch to offline joining.
+async function goOnline() {
+  const host = app.host;
+  host.mode = 'checking';
+  renderAddBox();
+  try {
+    host.online = await openOnlineTable((p) => { if (app.host === host) acceptOnlinePlayer(p); });
+    if (app.host !== host) return host.online.close();
+    host.mode = 'online';
+  } catch {
+    if (app.host !== host) return;
+    host.mode = 'offline';
+    ensureInvite();
+  }
+  renderAddBox();
+}
+
+// Table settings: each game can list `options`; the host's picks are remembered.
+function optionsFor(game) {
+  const saved = (app.host && app.host.options[game.id]) || {};
+  const out = {};
+  for (const o of game.options || []) out[o.id] = o.id in saved ? saved[o.id] : o.default;
+  return out;
+}
+
+function rulesText(game) {
+  if (!game) return '';
+  return typeof game.rules === 'function' ? game.rules(optionsFor(game)) : game.rules || '';
+}
+
+function renderOptions() {
+  const box = document.getElementById('options');
+  const host = app.host;
+  const game = host && getGame(host.gameId);
+  if (!box || !game) {
+    if (box) box.replaceChildren();
+    return;
+  }
+  const values = optionsFor(game);
+  const save = (id, v) => {
+    host.options[game.id] = { ...(host.options[game.id] || {}), [id]: v };
+    localStorage.setItem('tg-options', JSON.stringify(host.options));
+    sendToGuests(lobbyMessage);
+    updateLobby();
+  };
+  box.replaceChildren(...(game.options || []).map((o) => {
+    let input;
+    if (o.type === 'select') {
+      input = h('select', { onchange: (e) => save(o.id, e.target.value) },
+        o.choices.map(([v, label]) => h('option', { value: v, selected: String(values[o.id]) === String(v) }, label)));
+    } else {
+      input = h('input', {
+        type: 'number', inputmode: 'numeric', min: o.min, max: o.max, step: o.step, value: values[o.id],
+        onchange: (e) => {
+          const n = Math.round(Number(e.target.value));
+          const v = Number.isFinite(n) && e.target.value !== '' ? Math.min(o.max, Math.max(o.min, n)) : o.default;
+          e.target.value = v;
+          save(o.id, v);
+        },
+      });
+    }
+    return h('label', { class: 'field option' }, h('span', {}, o.label), input);
+  }));
+  box.hidden = !(game.options || []).length;
 }
 
 function lobbyMessage() {
-  return { t: 'lobby', players: app.host.players.map((p) => p.name), gameId: app.host.gameId };
+  const game = getGame(app.host.gameId);
+  return { t: 'lobby', players: app.host.players.map((p) => p.name), gameId: app.host.gameId, rules: rulesText(game) };
+}
+
+// Send a game's file to a phone that doesn't have it, in pieces.
+async function sendGameCode(player, gameId) {
+  try {
+    const source = await gameSource(gameId);
+    const size = 12000;
+    const parts = Math.ceil(source.length / size);
+    for (let i = 0; i < parts; i++) {
+      player.conn?.send({ t: 'gameCode', gameId, part: i, parts, chunk: source.slice(i * size, (i + 1) * size) });
+    }
+  } catch {
+    player.conn?.send({ t: 'error', text: 'The host couldn’t send that game.' });
+  }
 }
 
 function sendToGuests(makeMsg) {
@@ -255,17 +378,61 @@ function sendToGuests(makeMsg) {
   });
 }
 
+// Load a game's file (only when picked) and make it the table's game.
+async function selectGame(id) {
+  const host = app.host;
+  const entry = catalogEntry(id);
+  host.gameId = id;
+  host.gameLoading = id;
+  renderGamePicker();
+  updateLobby();
+  try {
+    await loadGame(id);
+    if (app.host !== host || host.gameId !== id) return;
+    localStorage.setItem('tg-last-game', id);
+  } catch (err) {
+    if (app.host !== host) return;
+    toast(navigator.onLine ? err.message : `${entry.name} isn’t downloaded on this phone. Connect to the internet to get it.`);
+  }
+  host.gameLoading = null;
+  sendToGuests(lobbyMessage);
+  renderGamePicker();
+  renderOptions();
+  updateLobby();
+}
+
+// Search box + list of games. Shows the chosen game first.
+function gamePicker() {
+  const input = h('input', {
+    type: 'search', placeholder: 'Search games, or type a player count', 'aria-label': 'Search games',
+    oninput: () => renderGamePicker(),
+  });
+  return h('div', { class: 'game-picker' }, input, h('div', { class: 'game-list', id: 'game-list', role: 'listbox', 'aria-label': 'Games' }));
+}
+
+async function renderGamePicker() {
+  const host = app.host;
+  const list = document.getElementById('game-list');
+  if (!host || !list) return;
+  const q = list.previousElementSibling.value.trim();
+  let results = searchGames(q);
+  if (!q) results = [catalogEntry(host.gameId), ...results.filter((g) => g.id !== host.gameId)].filter(Boolean);
+  const saved = await Promise.all(results.map((g) => isDownloaded(g.id)));
+  if (!document.getElementById('game-list')) return;
+  list.replaceChildren(...(results.length ? results.map((g, i) => {
+    const chosen = g.id === host.gameId;
+    return h('button', {
+      class: 'game-option' + (chosen ? ' chosen' : ''), role: 'option', 'aria-selected': chosen ? 'true' : 'false',
+      onclick: () => { if (!chosen) selectGame(g.id); },
+    },
+    h('span', { class: 'game-name' }, g.name, chosen && host.gameLoading ? h('small', {}, ' loading…') : null),
+    h('span', { class: 'game-meta' }, playersText(g) + (saved[i] ? ' · saved offline' : '')),
+    h('span', { class: 'game-blurb' }, g.blurb || ''));
+  }) : [h('p', { class: 'note' }, `No games match “${q}”.`)]));
+}
+
 function showLobby() {
   const host = app.host;
-  const select = h('select', {
-    'aria-label': 'Game',
-    onchange: (e) => {
-      host.gameId = e.target.value;
-      sendToGuests(lobbyMessage);
-      updateLobby();
-    },
-  }, GAMES.map((g) => h('option', { value: g.id, selected: g.id === host.gameId }, g.name)));
-
   screen(
     h('button', { class: 'back', onclick: () => { if (confirm('Leave and end this game for everyone?')) endHosting(); } }, '‹ End'),
     h('h2', {}, 'Your table'),
@@ -273,34 +440,124 @@ function showLobby() {
     h('div', { id: 'joining' }),
     h('h3', { class: 'section' }, 'Players'),
     h('ol', { class: 'players', id: 'players' }),
-    h('label', { class: 'field' }, h('span', {}, 'Game'), select),
+    h('h3', { class: 'section' }, 'Game'),
+    gamePicker(),
+    h('div', { class: 'options', id: 'options' }),
     h('p', { class: 'rules', id: 'rules' }),
     h('button', { class: 'primary big', id: 'start', onclick: startGame }),
-    h('section', { class: 'add-box' },
-      h('h3', { class: 'section' }, 'Add players'),
-      h('p', { class: 'step' }, 'Step 1 — they scan your join code with their camera, or you text them the link, and tap Join.'),
-      h('div', { class: 'qr', id: 'invite-qr' }, h('p', { class: 'note' }, 'Making a join code…')),
-      h('p', { class: 'note', id: 'invite-note' }),
-      h('div', { class: 'row' },
-        h('button', { onclick: () => host.current && shareLink(host.current.link, 'Join my card game:') }, 'Text the link'),
-        h('button', { onclick: () => host.current && copy(host.current.link) }, 'Copy link')),
-      h('p', { class: 'step' }, 'Step 2 — scan the code that appears on their phone (or open the reply link they text back).'),
-      scanOrPaste('Scan a player’s code', (text) => {
-        const code = extractCode(text, 'reply');
-        if (!code) return toast('That isn’t a player’s reply code.');
-        handleReply(code);
-      })),
+    h('section', { class: 'add-box', id: 'add-box' }),
   );
+  renderGamePicker();
+  renderOptions();
   updateLobby();
+  renderAddBox();
+}
+
+function renderAddBox() {
+  const host = app.host;
+  const box = document.getElementById('add-box');
+  if (!host || !box) return;
+  const title = h('h3', { class: 'section' }, 'Add players');
+
+  if (host.mode === 'checking') {
+    box.replaceChildren(title, h('p', { class: 'note' }, 'Getting your game code ready…'));
+    return;
+  }
+
+  if (host.mode === 'online') {
+    const qr = h('div', { class: 'qr' });
+    qr.innerHTML = qrSvg(host.online.link);
+    box.replaceChildren(
+      title,
+      h('p', { class: 'step' }, 'Players scan this game code with their camera (after joining your Wi‑Fi) and tap Join. They’ll show up above for you to let in.'),
+      qr,
+      h('div', { class: 'row' },
+        h('button', { onclick: () => shareLink(host.online.link, 'Join my card game:') }, 'Text the link'),
+        h('button', { onclick: () => copy(host.online.link) }, 'Copy link')),
+    );
+    return;
+  }
+
+  // Offline: each player's phone code has to be scanned.
+  box.replaceChildren(
+    title,
+    h('div', { class: 'offline-note' },
+      h('p', {}, 'No internet on this hotspot, so joining takes one extra step: after a player taps Join, scan the code on their phone.'),
+      h('button', { class: 'quiet', onclick: goOnline }, 'Try one-scan joining again')),
+    h('p', { class: 'step' }, 'Step 1 — they scan your game code and tap Join.'),
+    h('div', { class: 'qr', id: 'invite-qr' }, h('p', { class: 'note' }, 'Making a game code…')),
+    h('p', { class: 'note', id: 'invite-note' }),
+    h('div', { class: 'row' },
+      h('button', { onclick: () => (host.current ? shareLink(host.current.link, 'Join my card game:') : toast('Making a new game code…')) }, 'Text the link'),
+      h('button', { onclick: () => (host.current ? copy(host.current.link) : toast('Making a new game code…')) }, 'Copy link')),
+    h('p', { class: 'step' }, 'Step 2 — scan the code that appears on their phone.'),
+    scanOrPaste('Scan a player’s code', (text) => {
+      const code = extractCode(text, 'reply');
+      if (!code) return toast('That isn’t a player’s code.');
+      handleReply(code);
+    }),
+  );
   renderInvite();
-  ensureInvite();
+}
+
+function acceptOnlinePlayer(p) {
+  const host = app.host;
+  const entry = { name: null, status: 'connecting', conn: null, player: null, close: null };
+  host.joining.push(entry);
+  updateLobby();
+  const { conn, opened } = p.attach((msg) => onPlayerMessage(entry, msg), () => onPlayerClosed(entry));
+  entry.conn = conn;
+  entry.close = () => conn.close();
+  opened.then(() => { if (entry.status === 'connecting') { entry.status = 'connected'; updateLobby(); } });
+}
+
+// Messages from a player's phone (both joining methods).
+function onPlayerMessage(entry, msg) {
+  const host = app.host;
+  if (!host) return;
+  if (msg.t === 'hello' && !entry.name) {
+    clearTimeout(entry.timer);
+    entry.name = String(msg.name || 'Player').slice(0, 16);
+    entry.status = 'waiting';
+    updateLobby();
+    const box = document.getElementById('joining');
+    if (!box) {
+      toast(`${entry.name} wants to join — let them in from the lobby`);
+    } else {
+      toast(`${entry.name} wants to join`);
+      box.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+    }
+  } else if (msg.t === 'move' && entry.player) {
+    hostMove(host.players.indexOf(entry.player), msg.move);
+  } else if (msg.t === 'needGame' && entry.player && catalogEntry(msg.gameId)) {
+    sendGameCode(entry.player, msg.gameId);
+  }
+}
+
+function onPlayerClosed(entry) {
+  const host = app.host;
+  if (!host) return;
+  if (entry.player) {
+    if (!host.players.includes(entry.player)) return;
+    toast(`${entry.player.name} disconnected`);
+    if (host.state) {
+      entry.player.conn = null; // their seat stays until this round ends
+    } else {
+      host.players = host.players.filter((p) => p !== entry.player);
+      sendToGuests(lobbyMessage);
+      updateLobby();
+    }
+  } else if (host.joining.includes(entry)) {
+    host.joining = host.joining.filter((e) => e !== entry);
+    updateLobby();
+  }
 }
 
 const STATUS_TEXT = {
-  connecting: 'Code scanned — connecting…',
+  connecting: 'Connecting…',
   connected: 'Connected — getting their name…',
   waiting: 'Wants to join',
-  failed: 'Couldn’t connect. Check they’re on your hotspot, then have them scan your join code again.',
+  failed: 'Couldn’t connect. Check they’re on your hotspot, then have them scan your game code again.',
 };
 
 function updateLobby() {
@@ -308,7 +565,7 @@ function updateLobby() {
   const list = document.getElementById('players');
   if (!host || !list) return; // lobby isn't on screen
   const game = getGame(host.gameId);
-  document.getElementById('rules').textContent = game.rules;
+  document.getElementById('rules').textContent = rulesText(game);
 
   list.replaceChildren(...host.players.map((p, i) => h('li', {}, p.name,
     i === 0 ? h('small', {}, ' (you, host)') : null,
@@ -334,8 +591,13 @@ function updateLobby() {
   }
 
   const count = host.players.length;
-  const canStart = count >= game.minPlayers && count <= game.maxPlayers;
   const start = document.getElementById('start');
+  if (!game) {
+    start.disabled = true;
+    start.textContent = host.gameLoading ? 'Loading game…' : 'Pick a game';
+    return;
+  }
+  const canStart = count >= game.minPlayers && count <= game.maxPlayers;
   start.disabled = !canStart;
   start.textContent = canStart ? `Start ${game.name}`
     : count < game.minPlayers ? `${game.name} needs ${game.minPlayers}${game.maxPlayers > game.minPlayers ? '–' + game.maxPlayers : ''} players`
@@ -364,7 +626,11 @@ async function ensureInvite() {
 function renderInvite() {
   const host = app.host;
   const box = document.getElementById('invite-qr');
-  if (!host || !box || !host.current) return;
+  if (!host || !box) return;
+  if (!host.current) {
+    box.replaceChildren(h('p', { class: 'note' }, 'Making a new join code…'));
+    return;
+  }
   box.innerHTML = qrSvg(host.current.link);
   const note = document.getElementById('invite-note');
   note.textContent = host.current.address === 'private' && !app.camOK
@@ -392,10 +658,11 @@ async function handleReply(code) {
   host.invites.delete(reply.i);
   host.used.add(reply.i);
 
-  const entry = { id: reply.i, name: null, status: 'connecting', conn: null, player: null, pc: invite.pc };
+  const entry = { id: reply.i, name: null, status: 'connecting', conn: null, player: null, close: () => invite.pc.close() };
   host.joining.push(entry);
   if (host.current && host.current.id === reply.i) {
     host.current = null;
+    renderInvite(); // never leave a used code on screen
     ensureInvite(); // next person gets a fresh code
   }
   updateLobby();
@@ -409,44 +676,14 @@ async function handleReply(code) {
   }
 
   const setStatus = (st) => { entry.status = st; updateLobby(); };
-  const timer = setTimeout(() => { if (entry.status === 'connecting') setStatus('failed'); }, 20000);
+  entry.timer = setTimeout(() => { if (entry.status === 'connecting') setStatus('failed'); }, 20000);
   invite.pc.addEventListener('connectionstatechange', () => {
     if (invite.pc.connectionState === 'failed' && !entry.name) setStatus('failed');
   });
   const opened = () => { if (entry.status === 'connecting' || entry.status === 'failed') setStatus('connected'); };
   if (invite.channel.readyState === 'open') opened();
   else invite.channel.addEventListener('open', opened, { once: true });
-
-  entry.conn = wrapChannel(invite.channel, (msg) => {
-    if (msg.t === 'hello' && !entry.name) {
-      clearTimeout(timer);
-      entry.name = String(msg.name || 'Player').slice(0, 16);
-      setStatus('waiting');
-      const box = document.getElementById('joining');
-      if (!box) toast(`${entry.name} wants to join — let them in from the lobby`);
-      else {
-        toast(`${entry.name} wants to join`);
-        box.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
-      }
-    } else if (msg.t === 'move' && entry.player) {
-      hostMove(host.players.indexOf(entry.player), msg.move);
-    }
-  }, () => {
-    if (app.host !== host) return;
-    if (entry.player) {
-      toast(`${entry.player.name} disconnected`);
-      if (host.state) {
-        entry.player.conn = null; // their seat stays until this round ends
-      } else {
-        host.players = host.players.filter((p) => p !== entry.player);
-        sendToGuests(lobbyMessage);
-        updateLobby();
-      }
-    } else {
-      host.joining = host.joining.filter((e) => e !== entry);
-      updateLobby();
-    }
-  });
+  entry.conn = wrapChannel(invite.channel, (msg) => onPlayerMessage(entry, msg), () => onPlayerClosed(entry));
   return true;
 }
 
@@ -470,26 +707,27 @@ function decline(entry) {
   const host = app.host;
   host.joining = host.joining.filter((e) => e !== entry);
   entry.conn?.send({ t: 'declined' });
-  setTimeout(() => entry.pc.close(), 500);
+  setTimeout(() => entry.close && entry.close(), 500);
   updateLobby();
 }
 
 function dismiss(entry) {
   const host = app.host;
   host.joining = host.joining.filter((e) => e !== entry);
-  entry.pc.close();
+  if (entry.close) entry.close();
   updateLobby();
 }
 
 function startGame() {
   const host = app.host;
   const game = getGame(host.gameId);
+  if (!game) return toast('That game isn’t loaded yet.');
   host.players = host.players.filter((p, i) => i === 0 || p.conn);
   if (host.players.length < game.minPlayers || host.players.length > game.maxPlayers) {
     toast(`${game.name} needs ${game.minPlayers}–${game.maxPlayers} players.`);
     return showLobby();
   }
-  host.state = game.setup(host.players.map((p) => p.name));
+  host.state = game.setup(host.players.map((p) => p.name), optionsFor(game));
   sendAllViews();
 }
 
@@ -545,9 +783,10 @@ function renderHostTable() {
 
 function endHosting() {
   const host = app.host;
-  host?.players.forEach((p) => p.conn?.channel.close());
-  host?.joining.forEach((e) => e.pc.close());
+  host?.players.forEach((p) => p.conn?.close());
+  host?.joining.forEach((e) => e.close && e.close());
   host?.invites.forEach((inv) => inv.pc.close());
+  host?.online?.close();
   app.host = null;
   showHome();
 }
@@ -555,7 +794,7 @@ function endHosting() {
 // Replies opened from a text message arrive in a new tab; pass them to the game tab.
 if (bc) {
   bc.addEventListener('message', async (e) => {
-    if (e.data?.type === 'reply' && app.host) {
+    if (e.data?.type === 'reply' && app.host && app.host.mode === 'offline') {
       if (app.host.invites.size === 0) return;
       bc.postMessage({ type: 'ack' });
       await handleReply(e.data.code);
@@ -598,6 +837,46 @@ function joinWithCode(code) {
       class: 'primary big',
       onclick: () => { if (!needName()) makeReply(code); },
     }, 'Join'),
+  );
+}
+
+// One-scan join: connect through the introduction service, then wait to be let in.
+function joinOnline(hostId) {
+  screen(
+    h('h2', {}, 'Join a game'),
+    h('p', { class: 'note' }, 'Make sure you’re on the host’s Wi‑Fi or hotspot first.'),
+    nameField(),
+    h('button', {
+      class: 'primary big',
+      onclick: async () => {
+        if (needName()) return;
+        screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
+        app.guest = { conn: null, gameId: null, players: [], view: null, admitted: false };
+        try {
+          app.guest.conn = await joinOnlineTable(hostId, app.name, onHostMessage, onHostLost);
+        } catch (err) {
+          app.guest = null;
+          const gone = err && err.type === 'peer-unavailable';
+          return guestFailed(gone
+            ? 'That table isn’t open anymore. Ask the host for their current game code.'
+            : 'Couldn’t reach the host. Make sure you’re on their Wi‑Fi and it has internet. If there’s no internet, the host will show a different game code — scan that one.');
+        }
+        keepAwake();
+        app.guest.conn.send({ t: 'hello', name: app.name });
+        screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'));
+      },
+    }, 'Join'),
+  );
+}
+
+function onHostLost() {
+  if (!app.guest) return;
+  app.guest = null;
+  screen(
+    h('h2', {}, 'Disconnected from the host'),
+    h('p', {}, 'Scan the host’s game code again to rejoin.'),
+    h('button', { class: 'primary big', onclick: showJoinScan }, 'Rejoin'),
+    h('button', { class: 'quiet', onclick: showHome }, 'Home'),
   );
 }
 
@@ -651,16 +930,7 @@ async function makeReply(code) {
 
   const channel = await answer.channelReady;
   app.guest = { conn: null, gameId: null, players: [], view: null, admitted: false, pc: answer.pc };
-  app.guest.conn = wrapChannel(channel, onHostMessage, () => {
-    if (!app.guest) return;
-    app.guest = null;
-    screen(
-      h('h2', {}, 'Disconnected from the host'),
-      h('p', {}, 'Scan the host’s join code again to rejoin.'),
-      h('button', { class: 'primary big', onclick: showJoinScan }, 'Rejoin'),
-      h('button', { class: 'quiet', onclick: showHome }, 'Home'),
-    );
-  });
+  app.guest.conn = wrapChannel(channel, onHostMessage, onHostLost);
   await whenOpen(channel);
   done = true;
   app.guest.conn.send({ t: 'hello', name: app.name });
@@ -670,9 +940,38 @@ async function makeReply(code) {
   );
 }
 
+// Make sure this phone has the host's game: from its own copy, the internet,
+// or (offline) sent over by the host.
+function ensureGame(gameId) {
+  const g = app.guest;
+  if (getGame(gameId)) return Promise.resolve(getGame(gameId));
+  g.loads = g.loads || {};
+  if (g.loads[gameId]) return g.loads[gameId];
+  g.loads[gameId] = loadGame(gameId).catch(() => new Promise((resolve, reject) => {
+    g.codeWaiters = g.codeWaiters || {};
+    g.codeWaiters[gameId] = { resolve, reject, parts: [] };
+    g.conn.send({ t: 'needGame', gameId });
+    setTimeout(() => reject(new Error('timeout')), 20000);
+  })).catch((err) => {
+    delete g.loads[gameId];
+    throw err;
+  });
+  return g.loads[gameId];
+}
+
+function onGameCode(msg) {
+  const w = app.guest?.codeWaiters?.[msg.gameId];
+  if (!w) return;
+  w.parts[msg.part] = msg.chunk;
+  if (w.parts.filter((x) => x != null).length < msg.parts) return;
+  delete app.guest.codeWaiters[msg.gameId];
+  loadGameFromSource(msg.gameId, w.parts.join('')).then(w.resolve, w.reject);
+}
+
 function onHostMessage(msg) {
   const g = app.guest;
   if (!g) return;
+  if (msg.t === 'gameCode') return onGameCode(msg);
   if (msg.t === 'admitted') {
     g.admitted = true;
     g.host = msg.host;
@@ -687,12 +986,17 @@ function onHostMessage(msg) {
   } else if (msg.t === 'lobby') {
     g.players = msg.players;
     g.gameId = msg.gameId;
+    g.rules = msg.rules;
     g.view = null;
     if (g.admitted) showGuestLobby();
+    if (g.gameId) ensureGame(g.gameId).then(() => { if (g.admitted && !g.view) showGuestLobby(); }).catch(() => {});
   } else if (msg.t === 'view') {
     g.gameId = msg.gameId;
     g.view = msg.view;
-    renderGuestTable();
+    ensureGame(msg.gameId).then(renderGuestTable, () => {
+      screen(h('h2', {}, 'Couldn’t load the game'),
+        h('p', {}, 'Your phone couldn’t get this game. Ask the host to go back to the lobby and start again.'));
+    });
   } else if (msg.t === 'error') {
     toast(msg.text);
   }
@@ -700,10 +1004,12 @@ function onHostMessage(msg) {
 
 function showGuestLobby() {
   const g = app.guest;
-  const game = g.gameId ? getGame(g.gameId) : null;
+  const entry = g.gameId ? catalogEntry(g.gameId) : null;
+  const ready = g.gameId && getGame(g.gameId);
   screen(
     h('h2', {}, 'You’re in'),
-    game ? h('p', { class: 'rules' }, h('strong', {}, game.name + '. '), game.rules) : null,
+    entry ? h('p', { class: 'rules' }, h('strong', {}, entry.name + '. '), g.rules || '') : null,
+    entry && !ready ? h('p', { class: 'note' }, 'Getting the game ready on your phone…') : null,
     g.players.length ? h('ol', { class: 'players' }, g.players.map((n) => h('li', {}, n))) : null,
     h('p', { class: 'status' }, `Waiting for ${g.host || 'the host'} to start…`),
   );
@@ -711,8 +1017,9 @@ function showGuestLobby() {
 
 function renderGuestTable() {
   const g = app.guest;
+  if (!g || !g.view) return;
   const game = getGame(g.gameId);
-  if (!game) return toast('This game isn’t on your phone yet. Reload the page while online.');
+  if (!game) return;
   const table = h('div', { class: 'table' });
   screen(h('div', { class: 'topbar' }, h('span', {}, game.name)), table);
   game.render(g.view, table, (move) => g.conn.send({ t: 'move', move }));
@@ -723,8 +1030,10 @@ function renderGuestTable() {
 function route() {
   const hash = location.hash;
   history.replaceState(null, '', location.pathname);
+  const hostId = extractHostId(hash);
   const join = extractCode(hash, 'join');
   const reply = extractCode(hash, 'reply');
+  if (hostId) return joinOnline(hostId);
   if (join) return joinWithCode(join);
   if (reply) return deliverReplyFromLink(reply);
   showHome();

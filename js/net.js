@@ -151,10 +151,16 @@ export async function answerInvite(offer, { boost = false } = {}) {
 // Wrap a data channel with JSON send/receive.
 export function wrapChannel(channel, onMessage, onClose) {
   const handle = (data) => {
+    let msg;
     try {
-      onMessage(JSON.parse(data));
+      msg = JSON.parse(data);
+    } catch {
+      return console.warn('Ignored a message that wasn’t JSON');
+    }
+    try {
+      onMessage(msg);
     } catch (err) {
-      console.warn('Bad message', err);
+      console.error(err);
     }
   };
   channel.addEventListener('message', (e) => handle(e.data));
@@ -169,7 +175,9 @@ export function wrapChannel(channel, onMessage, onClose) {
     send(msg) {
       if (channel.readyState === 'open') channel.send(JSON.stringify(msg));
     },
-    channel,
+    close() {
+      channel.close();
+    },
   };
 }
 
@@ -178,4 +186,120 @@ export function whenOpen(channel) {
     if (channel.readyState === 'open') return resolve();
     channel.addEventListener('open', () => resolve(), { once: true });
   });
+}
+
+// ---------- One-scan joining (needs internet on the hotspot) ----------
+// A free public service (PeerJS) introduces the phones; the game itself then
+// runs directly between them, the same as the offline method.
+
+const RELAY_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// Optional: point at your own PeerJS server, e.g. localStorage 'tg-relay' =
+// {"host":"example.com","port":443,"path":"/","secure":true}. Default is PeerJS's free server.
+function relayOptions() {
+  try {
+    return { ...(JSON.parse(localStorage.getItem('tg-relay') || 'null') || {}), config: RELAY_CONFIG, debug: 0 };
+  } catch {
+    return { config: RELAY_CONFIG, debug: 0 };
+  }
+}
+
+function randomId(n = 10) {
+  const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+  const r = new Uint32Array(n);
+  crypto.getRandomValues(r);
+  return Array.from(r, (x) => chars[x % chars.length]).join('');
+}
+
+// Wraps a PeerJS connection in the same shape as wrapChannel.
+function wrapRelay(dc, onMessage, onClose) {
+  dc.on('data', (msg) => {
+    try {
+      onMessage(msg);
+    } catch (err) {
+      console.error(err);
+    }
+  });
+  let closed = false;
+  const done = () => { if (!closed) { closed = true; onClose && onClose(); } };
+  dc.on('close', done);
+  dc.on('error', done);
+  return {
+    send(msg) {
+      if (dc.open) dc.send(msg);
+    },
+    close() {
+      dc.close();
+    },
+  };
+}
+
+// Host: open the table. Calls onPlayer({ name, attach }) for each phone that joins;
+// call attach(onMessage, onClose) to get a connection. Rejects with no internet.
+export function openOnlineTable(onPlayer, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    if (!window.Peer) return reject(new Error('unavailable'));
+    const id = 'tablegames-' + randomId();
+    const peer = new window.Peer(id, relayOptions());
+    let opened = false;
+    const timer = setTimeout(() => {
+      if (!opened) { peer.destroy(); reject(new Error('timeout')); }
+    }, timeoutMs);
+    peer.on('open', () => {
+      opened = true;
+      clearTimeout(timer);
+      resolve({ id, link: baseUrl() + '#host=' + id, close: () => peer.destroy() });
+    });
+    peer.on('connection', (dc) => {
+      onPlayer({
+        name: String(dc.metadata?.name || 'Player').slice(0, 16),
+        attach(onMessage, onClose) {
+          const conn = wrapRelay(dc, onMessage, onClose);
+          return { conn, opened: new Promise((res) => (dc.open ? res() : dc.on('open', res))) };
+        },
+      });
+    });
+    peer.on('disconnected', () => {
+      // Lost the introduction service; games in progress keep going. Try to stay joinable.
+      setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, 3000);
+    });
+    peer.on('error', (err) => {
+      if (!opened) {
+        clearTimeout(timer);
+        peer.destroy();
+        reject(err);
+      }
+    });
+  });
+}
+
+// Player: join a host's table by its id.
+export function joinOnlineTable(hostId, name, onMessage, onClose, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    if (!window.Peer) return reject(Object.assign(new Error('unavailable'), { type: 'network' }));
+    const peer = new window.Peer(relayOptions());
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      peer.destroy();
+      reject(err);
+    };
+    const timer = setTimeout(() => fail(Object.assign(new Error('timeout'), { type: 'network' })), timeoutMs);
+    peer.on('error', fail);
+    peer.on('open', () => {
+      const dc = peer.connect(hostId, { reliable: true, serialization: 'json', metadata: { name } });
+      dc.on('open', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(wrapRelay(dc, onMessage, () => { onClose && onClose(); peer.destroy(); }));
+      });
+    });
+  });
+}
+
+export function extractHostId(text) {
+  const m = (text || '').match(/#host=(tablegames-[a-z0-9]+)/);
+  return m ? m[1] : null;
 }
