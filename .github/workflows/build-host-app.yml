@@ -1,0 +1,56 @@
+# Builds the Table Games Host Android app whenever the site changes,
+# and posts the installable file under Releases → "Table Games Host app".
+name: Build host app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: host-app
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Copy the web app into the host app
+        run: |
+          WWW=android/app/src/main/assets/www
+          mkdir -p "$WWW"
+          cp index.html sw.js manifest.webmanifest icon.svg icon-180.png icon-192.png icon-512.png icon-maskable-512.png "$WWW"/
+          cp -r css js games vendor "$WWW"/
+
+      - name: Build the app
+        working-directory: android
+        run: gradle assembleRelease --no-daemon
+
+      - name: Name the file
+        run: cp android/app/build/outputs/apk/release/app-release.apk TableGamesHost.apk
+
+      - name: Publish under Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: host-app
+          name: Table Games Host app
+          body: |
+            The Android app for hosting games on your phone's hotspot, with or without internet.
+            On your Android phone, tap TableGamesHost.apk below to download and install it.
+            Updated automatically each time the site changes.
+          files: TableGamesHost.apk
+          make_latest: true
