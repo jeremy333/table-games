@@ -173,6 +173,19 @@ function finishBidding(state) {
   state.turn = state.bidder;
 }
 
+// Everyone has seen the trick: clear it, or score the hand after the last one.
+function finishTrick(state) {
+  const win = state.lastTrick.winner;
+  state.trick = [];
+  if (state.hands.every((hd) => hd.length === 0)) {
+    state.taken[win].push(...state.discards);
+    endHand(state, win);
+  } else {
+    state.phase = 'play';
+    state.turn = win;
+  }
+}
+
 function endHand(state, lastWinner) {
   const pts = state.taken.map((cards) => cards.reduce((s, c) => s + pointsOf(c), 0));
   pts[lastWinner] += state.opts.lastTrick;
@@ -214,6 +227,7 @@ function endHand(state, lastWinner) {
     say(state, `${state.winners.map((s) => state.names[s]).join(' & ')} win the game!`);
   } else {
     state.phase = 'handOver';
+    state.ready = [false, false, false, false];
   }
 }
 
@@ -265,17 +279,33 @@ export default {
 
 .rook-card .idx { font-family: var(--sans); }
 .rook-card .pip { font-family: var(--sans); font-weight: 800; font-size: 1.5rem; }
-.rook-card.c-R { color: #c4262e; }
-.rook-card.c-G { color: #1f7a3d; }
-.rook-card.c-Y { color: #a87a05; }
-.rook-card.c-B { color: #1b1b1b; }
-.rook-card.c-rook { background: #1b1b1b; color: #fff; }
-.rook-card.c-rook .pip { font-size: 0.8rem; letter-spacing: 0.08em; padding-top: 0; }
+.rook-card.c-R { color: #d4141c; background: #ffe9e9; box-shadow: inset 0 0 0 3px #e0262e, 0 2px 0 rgba(0, 0, 0, 0.35); }
+.rook-card.c-G { color: #08893a; background: #e3f7ea; box-shadow: inset 0 0 0 3px #12a14a, 0 2px 0 rgba(0, 0, 0, 0.35); }
+.rook-card.c-Y { color: #9a6400; background: #fff3c2; box-shadow: inset 0 0 0 3px #f2b600, 0 2px 0 rgba(0, 0, 0, 0.35); }
+.rook-card.c-B { color: #111111; background: #ececec; box-shadow: inset 0 0 0 3px #222222, 0 2px 0 rgba(0, 0, 0, 0.35); }
+/* Cards you can't play right now keep their full colors (they just don't lift). */
+button.rook-card:disabled { filter: none; opacity: 1; }
+.rook-card.c-rook { background: #ffffff; color: #1b1b1b; box-shadow: inset 0 0 0 3px #1b1b1b, 0 2px 0 rgba(0, 0, 0, 0.35); }
+.rook-card .rook-word {
+  position: absolute; top: 0.3rem; left: 0; right: 0; text-align: center;
+  font: 800 0.55rem/1 var(--sans); letter-spacing: 0.12em;
+}
+.rook-card .rook-bird { position: absolute; inset: 0.95rem 0.35rem 0.75rem; display: grid; place-items: center; }
+.rook-card .rook-bird svg { width: 100%; height: 100%; }
+.rook-card.small .rook-word { display: none; }
+.rook-card.small .rook-bird { inset: 0.35rem; }
 .rook-card .pts {
   position: absolute; right: 0.25rem; bottom: 0.2rem; font: 700 0.65rem/1 var(--sans);
   color: var(--ink); background: var(--brass); border-radius: 999px; padding: 0.15rem 0.3rem;
 }
-.rook-card.trump { box-shadow: inset 0 -4px 0 var(--brass), 0 2px 0 rgba(0, 0, 0, 0.35); }
+.rook-card.trump::after {
+  content: '★'; position: absolute; top: 0.15rem; right: 0.3rem; font-size: 0.75rem; color: #b8860b;
+}
+.trick-spot.won .card { outline: 3px solid var(--brass); outline-offset: 3px; }
+.trick-spot.won > span { color: var(--brass); font-weight: 700; }
+.trick-result { text-align: center; margin: 0.6rem 0 0.2rem; font-size: 1.05rem; }
+.ready-box { display: grid; gap: 0.5rem; margin: 0.6rem 0; }
+.ready-who { text-align: center; color: var(--muted); font-size: 0.9rem; margin: 0; }
 .scoreboard.four { grid-template-columns: 1fr 1fr; }
 .called { text-align: center; margin: 0.2rem 0 0; color: var(--brass); font-size: 0.95rem; }
 .call-picker { margin: 0.8rem 0; }
@@ -283,7 +313,7 @@ export default {
 .card.small { width: 2.6rem; height: 3.6rem; }
 .card.small .idx { font-size: 0.75rem; }
 .card.small .pip { font-size: 1.1rem; padding-top: 0.3rem; }
-.rook-card.c-rook.small .pip { font-size: 0.6rem; }
+
 `,
   options: OPTIONS,
 
@@ -346,6 +376,9 @@ export default {
       // Cards the bidder may call: anything another player holds (not their hand or discards).
       callable: state.phase === 'call' && myTurn ? makeDeck().filter((c) => state.hands.some((hd, i) => i !== seat && hd.includes(c))) : [],
       summary: state.summary,
+      ready: state.ready || [false, false, false, false],
+      trickWinner: state.phase === 'trickEnd' ? state.lastTrick.winner : null,
+      trickPoints: state.phase === 'trickEnd' ? state.lastTrick.cards.reduce((sum, t) => sum + pointsOf(t.card), 0) : 0,
       winner: state.winners,
       log: state.log.slice(-4),
     };
@@ -354,11 +387,23 @@ export default {
   applyMove(state, seat, move) {
     if (state.phase === 'over') return 'The game is over.';
 
-    if (state.phase === 'handOver') {
-      if (move.type !== 'next') return 'Tap Next hand to continue.';
-      state.dealer = (state.dealer + 1) % 4;
-      state.summary = null;
-      dealHand(state);
+    // After a trick or a hand: wait until everyone taps Ready (or the host continues).
+    if (state.phase === 'trickEnd' || state.phase === 'handOver') {
+      if (move.type === 'continue') {
+        if (seat !== 0) return 'Only the host can continue without waiting.';
+        state.ready = [true, true, true, true];
+      } else if (move.type === 'ready' || move.type === 'next') {
+        state.ready[seat] = true;
+      } else {
+        return 'Tap Ready to continue.';
+      }
+      if (!state.ready.every(Boolean)) return null;
+      if (state.phase === 'trickEnd') finishTrick(state);
+      else {
+        state.dealer = (state.dealer + 1) % 4;
+        state.summary = null;
+        dealHand(state);
+      }
       return null;
     }
 
@@ -456,13 +501,11 @@ export default {
       state.taken[win].push(...state.trick.map((t) => t.card));
       state.tricksWon[win] += 1;
       state.lastTrick = { cards: state.trick, winner: win };
-      state.trick = [];
       state.turn = win;
+      // Leave the four cards on the table until everyone taps Ready.
+      state.phase = 'trickEnd';
+      state.ready = [false, false, false, false];
       say(state, `${state.names[win]} took the trick`);
-      if (state.hands.every((hd) => hd.length === 0)) {
-        state.taken[win].push(...state.discards);
-        endHand(state, win);
-      }
       return null;
     }
 
@@ -478,7 +521,7 @@ export default {
       if (text != null) e.textContent = text;
       return e;
     };
-    const inHand = ['nest', 'trump', 'call', 'play'].includes(view.phase);
+    const inHand = ['nest', 'trump', 'call', 'play', 'trickEnd'].includes(view.phase);
 
     // Scoreboard: teams for set partners, players for pick partner
     const board = el('div', 'scoreboard' + (view.mode === 'pick' ? ' four' : ''));
@@ -520,13 +563,15 @@ export default {
       statusText = view.winner.includes(view.seat) ? 'You win!' : `${view.winner.map((s) => view.names[s]).join(' & ')} win`;
     } else if (view.phase === 'handOver') {
       statusText = 'Hand over';
+    } else if (view.phase === 'trickEnd') {
+      statusText = 'Trick over';
     } else if (myTurn) {
       statusText = { bid: 'Your bid', nest: `Discard ${view.nestSize} cards`, trump: 'Name trump', call: 'Call your partner’s card', play: 'Your turn' }[view.phase];
     } else {
       const doing = { bid: 'bidding', nest: 'taking the nest', trump: 'naming trump', call: 'calling a partner', play: 'playing' }[view.phase];
       statusText = `${view.names[view.turn]} is ${doing}`;
     }
-    const active = myTurn && view.phase !== 'handOver' && view.phase !== 'over';
+    const active = myTurn && !['handOver', 'over', 'trickEnd'].includes(view.phase);
     root.append(el('p', 'status' + (active ? ' mine' : ''), statusText));
 
     // Hand summary
@@ -534,11 +579,7 @@ export default {
       const box = el('div', 'summary');
       box.append(el('p', '', view.summary.headline));
       view.summary.lines.forEach((l) => box.append(el('p', '', l)));
-      if (view.phase === 'handOver') {
-        const next = el('button', 'primary big', 'Next hand');
-        next.addEventListener('click', () => send({ type: 'next' }));
-        box.append(next);
-      }
+      if (view.phase === 'handOver') box.append(readyBox(view, send, 'Ready for the next hand', el));
       root.append(box);
     }
 
@@ -619,19 +660,24 @@ export default {
       root.append(picker);
     }
 
-    // Current trick
-    if (view.phase === 'play') {
+    // Current trick (stays on the table after the fourth card until everyone is ready)
+    if (view.phase === 'play' || view.phase === 'trickEnd') {
+      const ended = view.phase === 'trickEnd';
       const trickBox = el('div', 'trick');
       for (let k = 0; k < 4; k++) {
         const s = (view.seat + k) % 4;
-        const spot = el('div', 'trick-spot' + (s === view.turn ? ' active' : ''));
+        const spot = el('div', 'trick-spot' + (ended ? (s === view.trickWinner ? ' won' : '') : (s === view.turn ? ' active' : '')));
         const played = view.trick.find((t) => t.seat === s);
         spot.append(played ? rookCardEl(played.card, view.trump) : el('div', 'card empty'));
         spot.append(el('span', '', k === 0 ? 'You' : view.names[s]));
         trickBox.append(spot);
       }
       root.append(trickBox);
-      if (view.lastTrick) {
+      if (ended) {
+        const who = view.trickWinner === view.seat ? 'You take' : `${view.names[view.trickWinner]} takes`;
+        root.append(el('p', 'trick-result', `${who} the trick${view.trickPoints ? ` (+${view.trickPoints} points)` : ''}`));
+        root.append(readyBox(view, send, 'Ready for the next trick', el));
+      } else if (view.lastTrick) {
         root.append(el('p', 'last-trick', `Last trick: ${view.names[view.lastTrick.winner]} took ` +
           view.lastTrick.cards.map((t) => cardLabel(t.card)).join(', ')));
       }
@@ -672,7 +718,28 @@ export default {
   },
 };
 
+// An original bird drawing for the Rook card.
+const BIRD_SVG = '<svg viewBox="4 8 40 38" aria-hidden="true"><path fill="#1b1b1b" d="M41 13.5c-1.2-2.3-3.6-3.6-6.2-3.4-2.4.2-4.3 1.6-5.3 3.7-1 2-1.6 4.3-2.9 6.1-2.3 3.1-6.2 4.4-10.1 5.2-3.3.7-6.7 1.2-9.5 3.2l-3 2.2 4.4.4c-1.5 1.3-2.8 2.8-3.6 4.6l4.3-1.4c2.1 2.6 5.4 4 8.8 4 3.2 0 6.3-1.2 8.8-3.1 3.6-2.8 5.9-7 6.7-11.4.3-1.6.4-3.2.9-4.7.4-1.1 1.2-2.1 2.4-2.4l4.6-1.6z"/><circle cx="36.6" cy="13.2" r="1.25" fill="#fff"/><path fill="none" stroke="#1b1b1b" stroke-width="1.8" stroke-linecap="round" d="M22 38.5l-1.2 5.2M26.2 37.6l.6 5.4M18.6 43.7h4.4M24.6 43h4.4"/></svg>';
+
 const tricksText = (n) => `${n} trick${n === 1 ? '' : 's'}`;
+
+// "Ready" button for everyone, plus who we're waiting on, plus a host override.
+function readyBox(view, send, label, el) {
+  const box = el('div', 'ready-box');
+  const mine = view.ready[view.seat];
+  const btn = el('button', 'primary big', mine ? 'Waiting for others…' : label);
+  btn.disabled = mine;
+  btn.addEventListener('click', () => send({ type: 'ready' }));
+  box.append(btn);
+  const waiting = view.names.filter((_, s) => !view.ready[s]);
+  if (waiting.length) box.append(el('p', 'ready-who', `Waiting for: ${waiting.join(', ')}`));
+  if (view.seat === 0 && waiting.length) {
+    const go = el('button', 'quiet', 'Continue without waiting');
+    go.addEventListener('click', () => send({ type: 'continue' }));
+    box.append(go);
+  }
+  return box;
+}
 
 function rookCardEl(card, trump, opts = {}) {
   const el = document.createElement(opts.onClick ? 'button' : 'div');
@@ -680,7 +747,7 @@ function rookCardEl(card, trump, opts = {}) {
   el.className = `card rook-card c-${color}` + (opts.playable ? ' playable' : '') + (opts.small ? ' small' : '') +
     (trump && card !== ROOK && color === trump ? ' trump' : '');
   if (card === ROOK) {
-    el.innerHTML = '<span class="pip">ROOK</span>';
+    el.innerHTML = `<span class="rook-word">ROOK</span><span class="rook-bird">${BIRD_SVG}</span>`;
   } else {
     const n = card.slice(0, -1);
     el.innerHTML = `<span class="idx">${n}</span><span class="pip">${n}</span>`;

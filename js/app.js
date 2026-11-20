@@ -115,6 +115,22 @@ function nameField() {
   return h('label', { class: 'field' }, h('span', {}, 'Your name'), input);
 }
 
+// A hidden ID for this phone, so a player who drops out can be put back in their seat.
+function playerId() {
+  let id = localStorage.getItem('tg-player-id');
+  if (!id) {
+    const r = new Uint32Array(3);
+    crypto.getRandomValues(r);
+    id = Array.from(r, (x) => x.toString(36)).join('');
+    localStorage.setItem('tg-player-id', id);
+  }
+  return id;
+}
+
+function helloMsg() {
+  return { t: 'hello', name: app.name, pid: playerId() };
+}
+
 function needName() {
   if (app.name) return false;
   toast('Enter your name first');
@@ -131,6 +147,12 @@ async function keepAwake() {
 }
 document.addEventListener('visibilitychange', () => {
   if ((app.host || app.guest) && document.visibilityState === 'visible') keepAwake();
+  // Phone woke up: reconnect now instead of waiting.
+  const g = app.guest;
+  if (g && document.visibilityState === 'visible') {
+    if (g.reconnecting && g.retryNow) g.retryNow();
+    else if (g.conn) { g.conn.send({ t: 'ping' }); setTimeout(() => checkHost(g), 4000); }
+  }
   // Back from turning on the hotspot: pick up the new address.
   if (app.host && app.host.mode === 'local' && document.visibilityState === 'visible') refreshLocalAddress();
 });
@@ -410,32 +432,40 @@ function showLocalJoinHome() {
   );
 }
 
-function joinLocal() {
+// Open a connection to the host app's server on this hotspot.
+function connectLocal(onLost) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://${location.host}/ws?role=player`);
+    let opened = false;
+    const conn = {
+      send: (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); },
+      close: () => ws.close(),
+    };
+    const timer = setTimeout(() => { if (!opened) { ws.close(); reject(new Error('timeout')); } }, 10000);
+    ws.onopen = () => { opened = true; clearTimeout(timer); resolve(conn); };
+    ws.onmessage = (e) => {
+      try { onHostMessage(JSON.parse(e.data)); } catch (err) { console.error(err); }
+    };
+    ws.onclose = () => {
+      if (!opened) { clearTimeout(timer); reject(new Error('closed')); return; }
+      onLost(conn);
+    };
+  });
+}
+
+async function joinLocal() {
   screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
-  const ws = new WebSocket(`ws://${location.host}/ws?role=player`);
-  let opened = false;
-  const conn = {
-    send: (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); },
-    close: () => ws.close(),
-  };
-  app.guest = { conn, gameId: null, players: [], view: null, admitted: false };
-  const timer = setTimeout(() => {
-    if (!opened) { ws.close(); app.guest = null; guestFailedLocal(); }
-  }, 10000);
-  ws.onopen = () => {
-    opened = true;
-    clearTimeout(timer);
-    keepAwake();
-    conn.send({ t: 'hello', name: app.name });
-    screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'));
-  };
-  ws.onmessage = (e) => {
-    try { onHostMessage(JSON.parse(e.data)); } catch (err) { console.error(err); }
-  };
-  ws.onclose = () => {
-    if (!opened) return;
-    if (app.guest && app.guest.conn === conn) onHostLostLocal();
-  };
+  const g = { conn: null, gameId: null, players: [], view: null, admitted: false };
+  app.guest = g;
+  g.reconnect = () => connectLocal((c) => connectionLost(g, c));
+  try {
+    g.conn = await g.reconnect();
+  } catch {
+    if (app.guest === g) app.guest = null;
+    return guestFailedLocal();
+  }
+  connectedToHost(g);
+  screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'));
 }
 
 function guestFailedLocal() {
@@ -443,15 +473,6 @@ function guestFailedLocal() {
     h('h2', {}, 'Couldn’t connect'),
     h('p', {}, 'Make sure you’re still on the host’s hotspot, then try again.'),
     h('button', { class: 'primary big', onclick: joinLocal }, 'Try again'),
-  );
-}
-
-function onHostLostLocal() {
-  app.guest = null;
-  screen(
-    h('h2', {}, 'Disconnected from the host'),
-    h('p', {}, 'If the host started a new table, tap Rejoin.'),
-    h('button', { class: 'primary big', onclick: () => { if (!needName()) joinLocal(); } }, 'Rejoin'),
   );
 }
 
@@ -507,13 +528,21 @@ function renderOptions() {
       input = h('select', { onchange: (e) => save(o.id, e.target.value) },
         o.choices.map(([v, label]) => h('option', { value: v, selected: String(values[o.id]) === String(v) }, label)));
     } else {
+      let typing;
       input = h('input', {
         type: 'number', inputmode: 'numeric', min: o.min, max: o.max, step: o.step, value: values[o.id],
+        oninput: (e) => {
+          clearTimeout(typing);
+          const n = Math.round(Number(e.target.value));
+          if (e.target.value === '' || !Number.isFinite(n) || n < o.min || n > o.max) return;
+          typing = setTimeout(() => { if (String((app.host.options[game.id] || {})[o.id]) !== String(n)) save(o.id, n); }, 250);
+        },
         onchange: (e) => {
+          clearTimeout(typing);
           const n = Math.round(Number(e.target.value));
           const v = Number.isFinite(n) && e.target.value !== '' ? Math.min(o.max, Math.max(o.min, n)) : o.default;
-          e.target.value = v;
-          save(o.id, v);
+          if (e.target.value !== String(v)) e.target.value = v;
+          if (String((app.host.options[game.id] || {})[o.id]) !== String(v)) save(o.id, v);
         },
       });
     }
@@ -727,8 +756,16 @@ function acceptOnlinePlayer(p) {
 function onPlayerMessage(entry, msg) {
   const host = app.host;
   if (!host) return;
+  if (msg.t === 'ping') {
+    entry.conn.send({ t: 'pong' });
+    return;
+  }
   if (msg.t === 'hello' && !entry.name) {
     clearTimeout(entry.timer);
+    const pid = typeof msg.pid === 'string' ? msg.pid.slice(0, 40) : null;
+    const seated = pid && host.players.find((p, i) => i > 0 && p.pid === pid);
+    if (seated) return rejoin(entry, seated);
+    entry.pid = pid;
     entry.name = String(msg.name || 'Player').slice(0, 16);
     entry.status = 'waiting';
     updateLobby();
@@ -746,16 +783,35 @@ function onPlayerMessage(entry, msg) {
   }
 }
 
+// The same phone came back (screen went to sleep, signal dropped): back into its seat.
+function rejoin(entry, player) {
+  const host = app.host;
+  host.joining = host.joining.filter((e) => e !== entry);
+  const old = player.conn;
+  player.conn = entry.conn;
+  entry.player = player;
+  entry.name = player.name;
+  if (old && old !== entry.conn) { try { old.close(); } catch { /* already gone */ } }
+  entry.conn.send({ t: 'admitted', host: host.players[0].name });
+  entry.conn.send(lobbyMessage());
+  const seat = host.players.indexOf(player);
+  if (host.state && seat < host.state.names.length) sendView(seat);
+  toast(`${player.name} reconnected`);
+  if (host.state && !document.getElementById('players')) renderHostTable();
+  else updateLobby();
+}
+
 function onPlayerClosed(entry) {
   const host = app.host;
   if (!host) return;
   if (entry.player) {
     if (!host.players.includes(entry.player)) return;
-    toast(`${entry.player.name} disconnected`);
+    if (entry.player.conn !== entry.conn) return; // already replaced by a reconnect
+    entry.player.conn = null; // keep their seat; their phone reconnects on its own
+    toast(`${entry.player.name} lost connection — waiting for them to reconnect`);
     if (host.state) {
-      entry.player.conn = null; // their seat stays until this round ends
+      if (!document.getElementById('players')) renderHostTable();
     } else {
-      host.players = host.players.filter((p) => p !== entry.player);
       sendToGuests(lobbyMessage);
       updateLobby();
     }
@@ -777,16 +833,34 @@ function updateLobby() {
   const list = document.getElementById('players');
   if (!host || !list) return; // lobby isn't on screen
   const game = getGame(host.gameId);
-  document.getElementById('rules').textContent = rulesText(game);
+  // Only touch what changed, so a tap that's in progress (like Start) isn't lost.
+  setText(document.getElementById('rules'), rulesText(game));
 
-  list.replaceChildren(...host.players.map((p, i) => h('li', {}, p.name,
-    i === 0 ? h('small', {}, ' (you, host)') : null,
-    i > 0 && !p.conn ? h('small', { class: 'warn' }, ' disconnected') : null)));
+  const playersKey = host.players.map((p) => `${p.name}:${!!p.conn}`).join('|');
+  if (list.dataset.key !== playersKey) {
+    list.dataset.key = playersKey;
+    list.replaceChildren(...host.players.map((p, i) => h('li', {}, p.name,
+      i === 0 ? h('small', {}, ' (you, host)') : null,
+      i > 0 && !p.conn ? h('small', { class: 'warn' }, ' reconnecting… ') : null,
+      i > 0 && !p.conn ? h('button', {
+        class: 'quiet small-btn',
+        onclick: () => {
+          host.players = host.players.filter((x) => x !== p);
+          sendToGuests(lobbyMessage);
+          updateLobby();
+        },
+      }, 'Remove') : null)));
+  }
 
   const box = document.getElementById('joining');
-  if (host.joining.length === 0) {
+  const joinKey = `${host.relay}|` + host.joining.map((e) => `${e.name}:${e.status}`).join('|');
+  if (box.dataset.key === joinKey) {
+    // unchanged
+  } else if (host.joining.length === 0) {
+    box.dataset.key = joinKey;
     box.replaceChildren();
   } else {
+    box.dataset.key = joinKey;
     const waiting = host.joining.filter((e) => e.status === 'waiting');
     box.replaceChildren(h('section', { class: 'joining-box' },
       h('div', { class: 'joining-head' },
@@ -808,15 +882,19 @@ function updateLobby() {
   const count = host.players.length;
   const start = document.getElementById('start');
   if (!game) {
-    start.disabled = true;
-    start.textContent = host.gameLoading ? 'Loading game…' : 'Pick a game';
+    if (!start.disabled) start.disabled = true;
+    setText(start, host.gameLoading ? 'Loading game…' : 'Pick a game');
     return;
   }
   const canStart = count >= game.minPlayers && count <= game.maxPlayers;
-  start.disabled = !canStart;
-  start.textContent = canStart ? `Start ${game.name}`
+  if (start.disabled !== !canStart) start.disabled = !canStart;
+  setText(start, canStart ? `Start ${game.name}`
     : count < game.minPlayers ? `${game.name} needs ${game.minPlayers}${game.maxPlayers > game.minPlayers ? '–' + game.maxPlayers : ''} players`
-      : `${game.name} allows up to ${game.maxPlayers} players`;
+      : `${game.name} allows up to ${game.maxPlayers} players`);
+}
+
+function setText(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
 // Keep one fresh join code ready on the lobby screen.
@@ -906,7 +984,7 @@ function admit(entry) {
   const host = app.host;
   if (!host.joining.includes(entry) || !entry.name) return;
   host.joining = host.joining.filter((e) => e !== entry);
-  entry.player = { name: entry.name, conn: entry.conn };
+  entry.player = { name: entry.name, conn: entry.conn, pid: entry.pid };
   host.players.push(entry.player);
   entry.conn.send({ t: 'admitted', host: host.players[0].name });
   if (host.state) {
@@ -977,7 +1055,10 @@ function renderHostTable() {
   const view = game.viewFor(host.state, 0);
   const table = h('div', { class: 'table' });
   const waiting = host.joining.filter((e) => e.status === 'waiting').length;
+  const away = host.players.filter((p, i) => i > 0 && i < host.state.names.length && !p.conn).map((p) => p.name);
   screen(
+    away.length ? h('p', { class: 'away-note' },
+      `Waiting for ${away.join(' and ')} to reconnect. Their phone will rejoin on its own when it wakes up.`) : null,
     h('div', { class: 'topbar' },
       h('button', {
         class: 'back',
@@ -1068,11 +1149,17 @@ function joinOnline(hostId) {
       onclick: async () => {
         if (needName()) return;
         screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
-        app.guest = { conn: null, gameId: null, players: [], view: null, admitted: false };
+        const g = { conn: null, gameId: null, players: [], view: null, admitted: false };
+        app.guest = g;
+        g.reconnect = async () => {
+          const holder = {};
+          holder.conn = await joinOnlineTable(hostId, app.name, onHostMessage, () => connectionLost(g, holder.conn));
+          return holder.conn;
+        };
         try {
-          app.guest.conn = await joinOnlineTable(hostId, app.name, onHostMessage, onHostLost);
+          g.conn = await g.reconnect();
         } catch (err) {
-          app.guest = null;
+          if (app.guest === g) app.guest = null;
           const gone = err && err.type === 'peer-unavailable';
           const relay = await relayAvailable();
           return guestFailed(gone
@@ -1081,20 +1168,84 @@ function joinOnline(hostId) {
               ? 'Couldn’t reach the host. Check your internet connection, then scan the host’s game code again.'
               : 'Couldn’t reach the host. This Wi‑Fi may block phones from linking directly. Ask the host to turn on the relay (see the README), or try the host’s hotspot instead.');
         }
-        keepAwake();
-        app.guest.conn.send({ t: 'hello', name: app.name });
+        connectedToHost(g);
         screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'));
       },
     }, 'Join'),
   );
 }
 
+// ---------- staying connected (all games) ----------
+// Phones that sleep or lose signal drop off. Players reconnect on their own and
+// the host puts the same phone back into its seat.
+
+function connectedToHost(g) {
+  keepAwake();
+  g.lastPong = Date.now();
+  g.conn.send(helloMsg());
+  clearInterval(g.heartbeat);
+  g.heartbeat = setInterval(() => checkHost(g), 5000);
+}
+
+// Ping the host; if it has gone quiet (for example after the screen was off), reconnect.
+function checkHost(g) {
+  if (app.guest !== g) return clearInterval(g.heartbeat);
+  if (g.reconnecting || !g.conn) return;
+  if (Date.now() - g.lastPong > 16000) {
+    const dead = g.conn;
+    g.conn = null;
+    try { dead.close(); } catch { /* ignore */ }
+    return g.reconnect ? startReconnecting(g) : onHostLost();
+  }
+  g.conn.send({ t: 'ping' });
+}
+
+function connectionLost(g, conn) {
+  if (app.guest !== g || g.conn !== conn) return; // an old connection closing late
+  g.conn = null;
+  if (g.reconnect) startReconnecting(g);
+  else onHostLost();
+}
+
+function startReconnecting(g) {
+  if (g.reconnecting || app.guest !== g) return;
+  g.reconnecting = true;
+  const began = Date.now();
+  screen(
+    h('h2', {}, 'Reconnecting…'),
+    h('p', { class: 'status mine' }, 'Lost the connection to the host (maybe your screen turned off). Getting you back into your seat…'),
+    h('p', { class: 'note' }, 'Stay on the host’s Wi‑Fi or hotspot.'),
+    h('button', { class: 'quiet', onclick: () => { g.reconnecting = false; clearInterval(g.heartbeat); app.guest = null; showHome(); } }, 'Leave the game'),
+  );
+  const attempt = async () => {
+    if (app.guest !== g || !g.reconnecting) return;
+    try {
+      const conn = await g.reconnect();
+      if (app.guest !== g) { conn.close(); return; }
+      g.conn = conn;
+      g.reconnecting = false;
+      connectedToHost(g); // the host recognises this phone and sends the game back
+    } catch {
+      if (Date.now() - began > 5 * 60 * 1000) {
+        g.reconnecting = false;
+        clearInterval(g.heartbeat);
+        app.guest = null;
+        return guestFailed('Couldn’t get back to the host. Make sure you’re on their Wi‑Fi, then scan their game code again to return to your seat.');
+      }
+      g.retry = setTimeout(attempt, 3000);
+    }
+  };
+  g.retryNow = () => { clearTimeout(g.retry); attempt(); };
+  attempt();
+}
+
 function onHostLost() {
   if (!app.guest) return;
+  clearInterval(app.guest.heartbeat);
   app.guest = null;
   screen(
     h('h2', {}, 'Disconnected from the host'),
-    h('p', {}, 'Scan the host’s game code again to rejoin.'),
+    h('p', {}, 'Scan the host’s game code again. You’ll go straight back to your seat.'),
     h('button', { class: 'primary big', onclick: showJoinScan }, 'Rejoin'),
     h('button', { class: 'quiet', onclick: showHome }, 'Home'),
   );
@@ -1150,10 +1301,12 @@ async function makeReply(code) {
 
   const channel = await answer.channelReady;
   app.guest = { conn: null, gameId: null, players: [], view: null, admitted: false, pc: answer.pc };
-  app.guest.conn = wrapChannel(channel, onHostMessage, onHostLost);
+  const g = app.guest;
+  const conn = wrapChannel(channel, onHostMessage, () => connectionLost(g, conn));
+  g.conn = conn;
   await whenOpen(channel);
   done = true;
-  app.guest.conn.send({ t: 'hello', name: app.name });
+  connectedToHost(g);
   screen(
     h('h2', {}, 'Connected'),
     h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'),
@@ -1192,6 +1345,7 @@ function onHostMessage(msg) {
   const g = app.guest;
   if (!g) return;
   if (msg.t === 'gameCode') return onGameCode(msg);
+  if (msg.t === 'pong') { g.lastPong = Date.now(); return; }
   if (msg.t === 'admitted') {
     g.admitted = true;
     g.host = msg.host;
@@ -1280,6 +1434,8 @@ function route() {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+if (new URLSearchParams(location.search).has('debug')) window.__tg = app; // for testing only
 
 detectLocal().then((info) => {
   app.local = info;
