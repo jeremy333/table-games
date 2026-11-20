@@ -5,4 +5,4 @@
 // Paste the TURN credentials URL from your free Metered / Open Relay account,
 // including the apiKey, between the quotes. Leave empty to turn the relay off.
 // Example: 'https://yourapp.metered.live/api/v1/turn/credentials?apiKey=abc123'
-export const TURN_CREDENTIALS_URL = 'https://table_games.metered.live/api/v1/turn/credentials';
+export const TURN_CREDENTIALS_URL = 'https://table_games.metered.live/api/v1/turn/credentials?apiKey=7f13742756320a90a9e3d30caf1b24b4a32d';
