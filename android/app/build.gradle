@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.jeremy333.tablegames'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'io.github.jeremy333.tablegames'
+        minSdk 26
+        targetSdk 34
+        // A new number on every build, so each update installs over the last.
+        versionCode((int) (System.currentTimeMillis() / 60000L))
+        versionName '1.0'
+    }
+
+    // A fixed signing key kept in this folder, so updates install over each other.
+    signingConfigs {
+        release {
+            storeFile file('tablegames.keystore')
+            storePassword 'tablegames'
+            keyAlias 'tablegames'
+            keyPassword 'tablegames'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
