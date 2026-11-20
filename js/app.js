@@ -41,6 +41,154 @@ function screen(...kids) {
   stopScanner();
   root.replaceChildren(...kids.filter((k) => k != null));
   window.scrollTo(0, 0);
+  updateChatUI();
+}
+
+// ---------- table chat (all games) ----------
+// One group chat per table: short text and a few emoji. The host's phone
+// holds the messages while the table is open; nothing is stored anywhere.
+
+const CHAT_MAX = 200;
+const CHAT_KEEP = 50;
+const CHAT_EMOJI = ['👍', '😂', '😮', '🎉', '❤️', '😬'];
+const chatState = { msgs: [], unread: 0, open: false };
+
+function resetChat() {
+  chatState.msgs = [];
+  chatState.unread = 0;
+  chatState.open = false;
+  renderChat();
+}
+
+function chatAvailable() {
+  return !!(app.host || (app.guest && app.guest.admitted));
+}
+
+function myChatName() {
+  return app.host ? app.host.players[0].name : app.name;
+}
+
+function cleanChatText(t) {
+  return String(t || '').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+}
+
+// Host: add a message from anyone and pass it to every player.
+function hostChat(from, text) {
+  const host = app.host;
+  const clean = cleanChatText(text);
+  if (!host || !clean) return;
+  const msg = { from, text: clean, at: Date.now() };
+  host.chat = [...(host.chat || []), msg].slice(-100);
+  sendToGuests(() => ({ t: 'chat', msg }));
+  receiveChat(msg);
+}
+
+function sendChatHistory(conn) {
+  const host = app.host;
+  conn.send({ t: 'chatHistory', msgs: (host.chat || []).slice(-CHAT_KEEP) });
+}
+
+function receiveChat(msg) {
+  chatState.msgs = [...chatState.msgs, msg].slice(-CHAT_KEEP);
+  if (!chatState.open && msg.from !== myChatName()) chatState.unread += 1;
+  renderChat();
+}
+
+function sendChat(text) {
+  const clean = cleanChatText(text);
+  if (!clean) return false;
+  if (app.host) {
+    hostChat(app.host.players[0].name, clean);
+    return true;
+  }
+  const g = app.guest;
+  if (!g || !g.conn) {
+    toast('Reconnecting… try again in a moment.');
+    return false;
+  }
+  g.conn.send({ t: 'chat', text: clean });
+  return true;
+}
+
+function updateChatUI() {
+  const on = chatAvailable();
+  let btn = document.getElementById('chat-btn');
+  if (!on) {
+    btn?.remove();
+    document.getElementById('chat-panel')?.remove();
+    document.body.classList.remove('has-chat');
+    chatState.open = false;
+    return;
+  }
+  document.body.classList.add('has-chat');
+  if (!btn) {
+    btn = h('button', { id: 'chat-btn', 'aria-label': 'Table chat', onclick: () => openChat(!chatState.open) },
+      h('span', { class: 'chat-icon', 'aria-hidden': 'true' }),
+      h('span', { class: 'chat-badge', id: 'chat-badge' }));
+    btn.querySelector('.chat-icon').innerHTML =
+      '<svg viewBox="0 0 24 24"><path d="M4 5.5h16a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 3.5V17.5H4A1.5 1.5 0 0 1 2.5 16V7A1.5 1.5 0 0 1 4 5.5z"/></svg>';
+    document.body.append(btn);
+  }
+  renderChat();
+}
+
+function openChat(open) {
+  chatState.open = open;
+  if (open) chatState.unread = 0;
+  renderChat();
+  if (open) document.getElementById('chat-input')?.focus({ preventScroll: true });
+}
+
+function renderChat() {
+  const badge = document.getElementById('chat-badge');
+  if (badge) {
+    badge.textContent = chatState.unread > 9 ? '9+' : String(chatState.unread || '');
+    badge.hidden = !chatState.unread;
+    document.getElementById('chat-btn').setAttribute('aria-label',
+      chatState.unread ? `Table chat, ${chatState.unread} new` : 'Table chat');
+  }
+  let panel = document.getElementById('chat-panel');
+  if (!chatState.open || !chatAvailable()) {
+    panel?.remove();
+    return;
+  }
+  if (!panel) {
+    const input = h('input', {
+      id: 'chat-input', type: 'text', maxlength: String(CHAT_MAX), placeholder: 'Message the table', 'aria-label': 'Message', autocomplete: 'off',
+      onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } },
+    });
+    const submit = () => { if (sendChat(input.value)) input.value = ''; input.focus({ preventScroll: true }); };
+    const emoji = h('div', { class: 'chat-emoji' }, CHAT_EMOJI.map((em) => h('button', {
+      type: 'button', 'aria-label': `Add ${em}`,
+      onclick: () => {
+        const at = input.selectionStart ?? input.value.length;
+        input.value = (input.value.slice(0, at) + em + input.value.slice(at)).slice(0, CHAT_MAX);
+        input.focus({ preventScroll: true });
+      },
+    }, em)));
+    panel = h('section', { id: 'chat-panel', role: 'dialog', 'aria-label': 'Table chat' },
+      h('div', { class: 'chat-head' },
+        h('h3', {}, 'Table chat'),
+        app.host ? h('button', {
+          class: 'quiet', onclick: () => {
+            if (!confirm('Clear the chat for everyone?')) return;
+            app.host.chat = [];
+            sendToGuests(() => ({ t: 'chatClear' }));
+            chatState.msgs = [];
+            renderChat();
+          },
+        }, 'Clear') : null,
+        h('button', { onclick: () => openChat(false) }, 'Close')),
+      h('ol', { class: 'chat-list', id: 'chat-list', 'aria-live': 'polite' }),
+      emoji,
+      h('div', { class: 'chat-send' }, input, h('button', { class: 'primary', onclick: submit }, 'Send')));
+    document.body.append(panel);
+  }
+  const list = document.getElementById('chat-list');
+  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  list.replaceChildren(...(chatState.msgs.length ? chatState.msgs.map((m) => h('li', { class: m.from === myChatName() ? 'mine' : '' },
+    h('strong', {}, m.from), h('span', {}, m.text))) : [h('li', { class: 'chat-empty' }, 'No messages yet. Say hi!')]));
+  if (atBottom || list.dataset.first !== '1') { list.scrollTop = list.scrollHeight; list.dataset.first = '1'; }
 }
 
 let toastTimer;
@@ -340,6 +488,7 @@ function hotspotBox() {
 // ---------- host ----------
 
 function startHosting() {
+  resetChat();
   app.host = {
     players: [{ name: app.name, conn: null }],
     joining: [],          // people connecting, waiting to be let in
@@ -457,6 +606,7 @@ async function joinLocal() {
   screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
   const g = { conn: null, gameId: null, players: [], view: null, admitted: false };
   app.guest = g;
+  resetChat();
   g.reconnect = () => connectLocal((c) => connectionLost(g, c));
   try {
     g.conn = await g.reconnect();
@@ -760,6 +910,14 @@ function onPlayerMessage(entry, msg) {
     entry.conn.send({ t: 'pong' });
     return;
   }
+  if (msg.t === 'chat') {
+    if (!entry.player) return;
+    const now = Date.now();
+    if (now - (entry.lastChat || 0) < 600) return; // no flooding
+    entry.lastChat = now;
+    hostChat(entry.player.name, msg.text);
+    return;
+  }
   if (msg.t === 'hello' && !entry.name) {
     clearTimeout(entry.timer);
     const pid = typeof msg.pid === 'string' ? msg.pid.slice(0, 40) : null;
@@ -793,6 +951,7 @@ function rejoin(entry, player) {
   entry.name = player.name;
   if (old && old !== entry.conn) { try { old.close(); } catch { /* already gone */ } }
   entry.conn.send({ t: 'admitted', host: host.players[0].name });
+  sendChatHistory(entry.conn);
   entry.conn.send(lobbyMessage());
   const seat = host.players.indexOf(player);
   if (host.state && seat < host.state.names.length) sendView(seat);
@@ -987,6 +1146,7 @@ function admit(entry) {
   entry.player = { name: entry.name, conn: entry.conn, pid: entry.pid };
   host.players.push(entry.player);
   entry.conn.send({ t: 'admitted', host: host.players[0].name });
+  sendChatHistory(entry.conn);
   if (host.state) {
     entry.conn.send(lobbyMessage()); // plays from the next round
   } else {
@@ -1086,6 +1246,7 @@ function endHosting() {
   if (host) host.ending = true;
   host?.ws?.close();
   app.host = null;
+  resetChat();
   showHome();
 }
 
@@ -1151,6 +1312,7 @@ function joinOnline(hostId) {
         screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
         const g = { conn: null, gameId: null, players: [], view: null, admitted: false };
         app.guest = g;
+        resetChat();
         g.reconnect = async () => {
           const holder = {};
           holder.conn = await joinOnlineTable(hostId, app.name, onHostMessage, () => connectionLost(g, holder.conn));
@@ -1301,6 +1463,7 @@ async function makeReply(code) {
 
   const channel = await answer.channelReady;
   app.guest = { conn: null, gameId: null, players: [], view: null, admitted: false, pc: answer.pc };
+  resetChat();
   const g = app.guest;
   const conn = wrapChannel(channel, onHostMessage, () => connectionLost(g, conn));
   g.conn = conn;
@@ -1346,6 +1509,15 @@ function onHostMessage(msg) {
   if (!g) return;
   if (msg.t === 'gameCode') return onGameCode(msg);
   if (msg.t === 'pong') { g.lastPong = Date.now(); return; }
+  if (msg.t === 'chat') { if (msg.msg) receiveChat(msg.msg); return; }
+  if (msg.t === 'chatHistory') {
+    const seen = chatState.msgs.length;
+    chatState.msgs = Array.isArray(msg.msgs) ? msg.msgs.slice(-CHAT_KEEP) : [];
+    if (!seen) chatState.unread = 0; // first history on joining: nothing is "new" yet
+    renderChat();
+    return;
+  }
+  if (msg.t === 'chatClear') { chatState.msgs = []; renderChat(); return; }
   if (msg.t === 'admitted') {
     g.admitted = true;
     g.host = msg.host;
