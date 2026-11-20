@@ -131,11 +131,14 @@ async function keepAwake() {
 }
 document.addEventListener('visibilitychange', () => {
   if ((app.host || app.guest) && document.visibilityState === 'visible') keepAwake();
+  // Back from turning on the hotspot: pick up the new address.
+  if (app.host && app.host.mode === 'local' && document.visibilityState === 'visible') refreshLocalAddress();
 });
 
 // ---------- home ----------
 
 function showHome() {
+  if (app.local && !app.local.isHostPhone) return showLocalJoinHome();
   screen(
     h('header', { class: 'hero' },
       h('h1', {}, 'Table Games'),
@@ -144,9 +147,56 @@ function showHome() {
     h('div', { class: 'stack' },
       h('button', { class: 'primary big', onclick: () => { if (!needName()) startHosting(); } }, 'Host a game'),
       h('button', { class: 'big', onclick: () => { if (!needName()) showJoinScan(); } }, 'Join a game'),
-      h('button', { class: 'quiet', onclick: showLibrary }, 'Games & offline downloads')),
+      h('button', { class: 'quiet', onclick: showLibrary }, 'Games & offline downloads'),
+      app.local ? null : h('button', { class: 'quiet', onclick: () => showOfflineHelp(showHome) }, 'Hosting with no internet?')),
     h('p', { class: 'note' },
       'Going somewhere without internet? Open Games & offline downloads first and save the games you want.'),
+  );
+}
+
+// ---------- help: hosting with no internet ----------
+
+// Where this copy of the site lives on GitHub (so friends' copies point to their own app).
+function repoInfo() {
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
+  const repo = location.pathname.split('/').filter(Boolean)[0];
+  if (m && repo) return { owner: m[1], repo };
+  return { owner: 'jeremy333', repo: 'table-games' };
+}
+
+function hostAppLinks() {
+  const { owner, repo } = repoInfo();
+  const page = `https://github.com/${owner}/${repo}/releases/tag/host-app`;
+  return {
+    page,
+    apk: `https://github.com/${owner}/${repo}/releases/download/host-app/TableGamesHost.apk`,
+    // Opens the app if it's installed; otherwise goes to the download page.
+    open: `intent://open#Intent;scheme=tablegames;package=io.github.jeremy333.tablegames;S.browser_fallback_url=${encodeURIComponent(page)};end`,
+  };
+}
+
+function showOfflineHelp(back) {
+  const android = /Android/i.test(navigator.userAgent);
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const links = hostAppLinks();
+  screen(
+    h('button', { class: 'back', onclick: back || showHome }, '‹ Back'),
+    h('h2', {}, 'Hosting with no internet'),
+    h('div', { class: 'help-card good' },
+      h('h3', {}, 'Have cell signal? You’re all set.'),
+      h('p', {}, 'Turn on your phone’s hotspot with mobile data on, open Table Games, and tap Host a game. Card games use very little data.')),
+    h('div', { class: 'help-card' },
+      h('h3', {}, 'No signal at all (like on a plane)?'),
+      h('p', {}, 'The host needs an Android phone with the free Table Games Host app. Phone browsers can’t host on their own hotspot without internet, but the app can.'),
+      ios ? h('p', { class: 'note' }, 'iPhones can’t run a hotspot without cell signal, so an Android friend will need to host. You can still join and play from your iPhone.') : null,
+      h('ol', { class: 'help-steps' },
+        h('li', {}, h('strong', {}, 'Before you go, while you have internet: '), 'download and install the app on the Android phone that will host.'),
+        h('li', {}, 'Android will ask to allow your browser to install apps. Allow it, then tap Install. (It may warn that the app isn’t from the Play Store; that’s expected.)'),
+        h('li', {}, h('strong', {}, 'At game time: '), 'open Table Games Host, tap Open hotspot settings and turn the hotspot on, then tap Host a game.'),
+        h('li', {}, 'Friends scan the Wi‑Fi code to join your hotspot, then scan the game code and play in their browsers. They don’t need the app.'))),
+    android ? h('div', { class: 'stack' },
+      h('a', { class: 'button primary big', href: links.apk }, 'Download the host app'),
+      h('a', { class: 'button big', href: links.open }, 'Open the host app (if installed)')) : h('p', { class: 'note' }, `On an Android phone, open this page and tap Download, or visit ${links.page}`),
   );
 }
 
@@ -259,6 +309,7 @@ function hotspotBox() {
       h('li', {}, 'Turn on your hotspot. iPhone: Settings › Personal Hotspot › Allow Others to Join. Android: Settings › Connections › Mobile Hotspot.'),
       h('li', {}, 'Type its name and password below, exactly as your phone shows them. Saved on this phone only.'),
       h('li', {}, 'Others scan the Wi‑Fi code to join your hotspot, then scan your join code below.')),
+    window.TGHost ? h('button', { onclick: () => window.TGHost.openHotspotSettings() }, 'Open hotspot settings') : null,
     h('div', { class: 'wifi-fields' }, ssid, pass),
     qr,
   );
@@ -284,7 +335,124 @@ function startHosting() {
   keepAwake();
   showLobby();
   selectGame(app.host.gameId);
-  goOnline();
+  if (app.local && app.local.isHostPhone) connectLocalHost();
+  else goOnline();
+}
+
+// ---------- host app (Android): the table runs on this phone's own server ----------
+// Works on the phone's hotspot with no internet; players join from their browsers.
+
+function connectLocalHost() {
+  const host = app.host;
+  host.mode = 'local';
+  host.address = pickAddress(app.local.addresses);
+  renderAddBox();
+  const ws = new WebSocket(`ws://${location.host}/ws?role=host`);
+  host.ws = ws;
+  const byId = new Map();
+  ws.onmessage = (e) => {
+    const d = String(e.data);
+    const a = d.indexOf('|');
+    const kind = d.slice(0, a);
+    const rest = d.slice(a + 1);
+    const b = rest.indexOf('|');
+    const id = b < 0 ? rest : rest.slice(0, b);
+    if (kind === 'join') {
+      const entry = {
+        name: null, status: 'connected', player: null,
+        conn: { send: (m) => { if (ws.readyState === 1) ws.send(`${id}|${JSON.stringify(m)}`); }, close: () => { if (ws.readyState === 1) ws.send(`close|${id}`); } },
+      };
+      entry.close = () => entry.conn.close();
+      byId.set(id, entry);
+      host.joining.push(entry);
+      updateLobby();
+    } else if (kind === 'msg') {
+      const entry = byId.get(id);
+      if (!entry) return;
+      try { onPlayerMessage(entry, JSON.parse(rest.slice(b + 1))); } catch (err) { console.error(err); }
+    } else if (kind === 'leave') {
+      const entry = byId.get(id);
+      byId.delete(id);
+      if (entry) onPlayerClosed(entry);
+    }
+  };
+  ws.onclose = () => {
+    if (app.host === host && !host.ending) toast('The table’s connection stopped. Close and reopen the app to start a new table.');
+  };
+}
+
+// Pick the address other phones should use: the hotspot first, then Wi-Fi.
+function pickAddress(addresses) {
+  const isPrivate = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+  const rank = (a) => {
+    if (!isPrivate(a.ip)) return 9;
+    if (/^(ap|swlan|softap)/i.test(a.name)) return 0;
+    if (/^wlan[1-9]/i.test(a.name)) return 1;
+    if (/^(wlan|wl|eth|en)/i.test(a.name)) return 2;
+    if (/^(rmnet|ccmni|v4-|dummy|tun|lo)/i.test(a.name)) return 8;
+    return 3;
+  };
+  return (addresses || []).slice().sort((x, y) => rank(x) - rank(y))[0] || null;
+}
+
+function localJoinLink(host) {
+  return host.address ? `http://${host.address.ip}:${app.local.port}/#lhost` : null;
+}
+
+// Player side: this page came from the host phone, so joining is one tap.
+function showLocalJoinHome() {
+  screen(
+    h('header', { class: 'hero' },
+      h('h1', {}, 'Table Games'),
+      h('p', {}, 'You’re connected to the host’s phone. Enter your name and join.')),
+    nameField(),
+    h('button', { class: 'primary big', onclick: () => { if (!needName()) joinLocal(); } }, 'Join the game'),
+  );
+}
+
+function joinLocal() {
+  screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
+  const ws = new WebSocket(`ws://${location.host}/ws?role=player`);
+  let opened = false;
+  const conn = {
+    send: (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); },
+    close: () => ws.close(),
+  };
+  app.guest = { conn, gameId: null, players: [], view: null, admitted: false };
+  const timer = setTimeout(() => {
+    if (!opened) { ws.close(); app.guest = null; guestFailedLocal(); }
+  }, 10000);
+  ws.onopen = () => {
+    opened = true;
+    clearTimeout(timer);
+    keepAwake();
+    conn.send({ t: 'hello', name: app.name });
+    screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'));
+  };
+  ws.onmessage = (e) => {
+    try { onHostMessage(JSON.parse(e.data)); } catch (err) { console.error(err); }
+  };
+  ws.onclose = () => {
+    if (!opened) return;
+    if (app.guest && app.guest.conn === conn) onHostLostLocal();
+  };
+}
+
+function guestFailedLocal() {
+  screen(
+    h('h2', {}, 'Couldn’t connect'),
+    h('p', {}, 'Make sure you’re still on the host’s hotspot, then try again.'),
+    h('button', { class: 'primary big', onclick: joinLocal }, 'Try again'),
+  );
+}
+
+function onHostLostLocal() {
+  app.guest = null;
+  screen(
+    h('h2', {}, 'Disconnected from the host'),
+    h('p', {}, 'If the host started a new table, tap Rejoin.'),
+    h('button', { class: 'primary big', onclick: () => { if (!needName()) joinLocal(); } }, 'Rejoin'),
+  );
 }
 
 // Try one-scan joining; if the hotspot has no internet, switch to offline joining.
@@ -460,6 +628,32 @@ function renderAddBox() {
   if (!host || !box) return;
   const title = h('h3', { class: 'section' }, 'Add players');
 
+  if (host.mode === 'local') {
+    const link = localJoinLink(host);
+    if (!link) {
+      box.replaceChildren(title, h('div', { class: 'offline-note' },
+        h('p', {}, 'Turn on your phone’s hotspot, then tap Refresh.'),
+        h('button', { class: 'quiet', onclick: refreshLocalAddress }, 'Refresh')));
+      return;
+    }
+    const qr = h('div', { class: 'qr' });
+    qr.innerHTML = qrSvg(link);
+    const others = (app.local.addresses || []).filter((a) => a.ip !== host.address.ip);
+    box.replaceChildren(
+      title,
+      h('p', { class: 'step' }, 'Players join your hotspot (Wi‑Fi code above), then scan this game code with their camera and tap Join. No internet or app needed on their phones.'),
+      qr,
+      h('p', { class: 'note center' }, link),
+      h('div', { class: 'row' },
+        h('button', { onclick: () => shareLink(link, 'Join my card game:') }, 'Text the link'),
+        h('button', { onclick: refreshLocalAddress }, 'Refresh')),
+      others.length ? h('details', { class: 'addr-pick' },
+        h('summary', {}, `Using ${host.address.name} (${host.address.ip}). Players can’t connect? Try another:`),
+        ...others.map((a) => h('button', { class: 'quiet', onclick: () => { host.address = a; renderAddBox(); } }, `${a.name} — ${a.ip}`))) : null,
+    );
+    return;
+  }
+
   if (host.mode === 'checking') {
     box.replaceChildren(title, h('p', { class: 'note' }, 'Getting your game code ready…'));
     return;
@@ -484,7 +678,8 @@ function renderAddBox() {
     title,
     h('div', { class: 'offline-note' },
       h('p', {}, 'No internet on this hotspot, so joining takes one extra step: after a player taps Join, scan the code on their phone.'),
-      h('button', { class: 'quiet', onclick: goOnline }, 'Try one-scan joining again')),
+      h('button', { class: 'quiet', onclick: goOnline }, 'Try one-scan joining again'),
+      h('button', { class: 'quiet', onclick: () => showOfflineHelp(showLobby) }, 'Hosting from your own hotspot? Read this')),
     h('p', { class: 'step' }, 'Step 1 — they scan your game code and tap Join.'),
     h('div', { class: 'qr', id: 'invite-qr' }, h('p', { class: 'note' }, 'Making a game code…')),
     h('p', { class: 'note', id: 'invite-note' }),
@@ -499,6 +694,15 @@ function renderAddBox() {
     }),
   );
   renderInvite();
+}
+
+async function refreshLocalAddress() {
+  try {
+    const info = await (await fetch('/tg-local/info', { cache: 'no-store' })).json();
+    app.local.addresses = info.addresses;
+    if (app.host) app.host.address = pickAddress(info.addresses);
+  } catch { /* keep the old list */ }
+  renderAddBox();
 }
 
 function acceptOnlinePlayer(p) {
@@ -795,6 +999,8 @@ function endHosting() {
   host?.joining.forEach((e) => e.close && e.close());
   host?.invites.forEach((inv) => inv.pc.close());
   host?.online?.close();
+  if (host) host.ending = true;
+  host?.ws?.close();
   app.host = null;
   showHome();
 }
@@ -1038,9 +1244,27 @@ function renderGuestTable() {
 
 // ---------- start ----------
 
+// Is this page being served by the Table Games host app on someone's phone?
+async function detectLocal() {
+  if (location.protocol !== 'http:') return null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch('/tg-local/info', { cache: 'no-store', signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const info = await res.json();
+    info.isHostPhone = ['127.0.0.1', 'localhost'].includes(location.hostname);
+    return info;
+  } catch {
+    return null;
+  }
+}
+
 function route() {
   const hash = location.hash;
   history.replaceState(null, '', location.pathname);
+  if (app.local && !app.local.isHostPhone) return hash.includes('lhost') ? showLocalJoinHome() : showHome();
   const hostId = extractHostId(hash);
   const join = extractCode(hash, 'join');
   const reply = extractCode(hash, 'reply');
@@ -1054,5 +1278,8 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-route();
+detectLocal().then((info) => {
+  app.local = info;
+  route();
+});
 window.__tgStarted = true;

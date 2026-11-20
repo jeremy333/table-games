@@ -48,6 +48,17 @@ On the home screen, **Games & offline downloads** lets anyone search the games a
 
 The host's phone holds the real game. Other phones send moves to it and receive only what they're allowed to see, so nobody can peek at other hands.
 
+## Hosting from your phone's hotspot with no internet (Android host app)
+
+Android phones can't link to their own hotspot's guests from a browser, so for no-internet games the host uses a small Android app, **Table Games Host**. Friends don't install anything: they join the hotspot, scan the game code, and play in their browsers. The game even loads from the host's phone, so their phones don't need the site saved.
+
+1. GitHub builds the app automatically after every update to this repo (Actions tab → "Build host app", about 3–5 minutes).
+2. On your Android phone, open this repo's **Releases** page, open **Table Games Host app**, and tap **TableGamesHost.apk**.
+3. Allow your browser to install apps when Android asks, then install. Later updates install right over the old one.
+4. Open the app, turn on your hotspot (there's an **Open hotspot settings** button), and tap **Host a game**.
+
+Keep the app open on screen while you play.
+
 ## Turning on the relay (recommended)
 
 Many Wi‑Fi networks (home routers, mesh systems, guest networks, some hotspots) block devices from talking to each other directly. Players then see "Couldn't connect" even though they're in the same room. The relay fixes this: phones still connect directly when they can, and fall back to the relay when they can't.

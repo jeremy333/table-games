@@ -281,3 +281,20 @@ h3.section { font-family: var(--serif); font-weight: 400; font-size: 1.15rem; co
   .game-option.static { padding-right: 0.8rem; }
   .game-action { position: static; transform: none; margin-top: 0.4rem; }
 }
+.note.center { text-align: center; word-break: break-all; }
+.addr-pick { font-size: 0.85rem; color: var(--muted); margin-top: 0.6rem; }
+.addr-pick summary { cursor: pointer; }
+.addr-pick button { display: block; padding: 0.3rem 0; min-height: 0; }
+
+/* ---------- help screens ---------- */
+a.button {
+  display: block; text-align: center; text-decoration: none;
+  color: var(--chalk); border: 1.5px solid var(--felt-line); border-radius: 10px; padding: 0.9rem 1rem;
+}
+a.button.primary { background: var(--brass); border-color: var(--brass); color: #1a1405; font-weight: 600; }
+a.button:focus-visible { outline: 3px solid var(--brass); outline-offset: 2px; }
+.help-card { border: 1.5px solid var(--felt-line); border-radius: 12px; padding: 0.4rem 1rem 0.8rem; margin: 1rem 0; }
+.help-card.good { border-color: #3f8f5f; }
+.help-card h3 { font-family: var(--serif); font-weight: 700; margin: 0.6rem 0 0.2rem; }
+.help-steps { padding-left: 1.2rem; }
+.help-steps li { margin-bottom: 0.55rem; }
