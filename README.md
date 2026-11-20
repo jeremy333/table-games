@@ -36,7 +36,8 @@ On the home screen, **Games & offline downloads** lets anyone search the games a
 
 ## How it works
 
-- `js/net.js` — direct phone-to-phone links (WebRTC). No server; the QR/link carries the connection details.
+- `js/net.js` — phone-to-phone links (WebRTC), with the optional relay fallback.
+- `js/config.js` — site settings (the relay key).
 - `js/qr.js` — draws and scans QR codes, fully offline.
 - `js/cards.js` — shared deck, shuffle, and card drawing for any game.
 - `js/app.js` — screens, lobby, and passing moves between phones.
@@ -47,9 +48,19 @@ On the home screen, **Games & offline downloads** lets anyone search the games a
 
 The host's phone holds the real game. Other phones send moves to it and receive only what they're allowed to see, so nobody can peek at other hands.
 
+## Turning on the relay (recommended)
+
+Many Wi‑Fi networks (home routers, mesh systems, guest networks, some hotspots) block devices from talking to each other directly. Players then see "Couldn't connect" even though they're in the same room. The relay fixes this: phones still connect directly when they can, and fall back to the relay when they can't.
+
+1. Create a free account for **Open Relay** at https://www.metered.ca/tools/openrelay/ (20 GB a month free; card games use only a tiny amount).
+2. In your Metered dashboard, find your TURN credentials URL. It looks like `https://yourapp.metered.live/api/v1/turn/credentials?apiKey=...`.
+3. In this repo, open `js/config.js`, click the pencil icon, paste that URL between the quotes on the `TURN_CREDENTIALS_URL` line, and commit.
+
+The key is visible to anyone who looks at the site's files. The worst someone could do with it is use up your free monthly allowance, and you can make a new key in the dashboard anytime.
+
 ## Troubleshooting
 
-- **Players can't connect:** make sure every phone is on the same Wi‑Fi or hotspot. Keep the host's screen on (the app tries to keep it awake).
+- **Players can't connect:** make sure every phone is on the same Wi‑Fi or hotspot, and turn on the relay (above). Keep the host's screen on (the app tries to keep it awake).
 - **Still not connecting:** on the host, tap **Scan their reply** once and allow the camera before making invites. Some browsers share a phone's network address more readily after that.
 - **Someone dropped out:** they need a fresh invite. Go back to the lobby, invite them again, and start a new round.
 - **Not seeing an update:** open the site while online and reload once.

@@ -192,14 +192,44 @@ export function whenOpen(channel) {
 // A free public service (PeerJS) introduces the phones; the game itself then
 // runs directly between them, the same as the offline method.
 
-const RELAY_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+import { TURN_CREDENTIALS_URL } from './config.js';
+
+const STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
+let iceServers = STUN;
+let turnReady = null;
+
+// Fetch relay (TURN) credentials once per visit. Phones still try a direct
+// connection first; the relay is only used when the network blocks that.
+function loadTurn() {
+  if (turnReady) return turnReady;
+  turnReady = (async () => {
+    if (!TURN_CREDENTIALS_URL) return false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const res = await fetch(TURN_CREDENTIALS_URL, { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(t);
+      const list = await res.json();
+      if (Array.isArray(list) && list.length) {
+        iceServers = [...STUN, ...list];
+        return true;
+      }
+    } catch { /* no internet or bad key: direct connections only */ }
+    return false;
+  })();
+  return turnReady;
+}
+
+export async function relayAvailable() {
+  return loadTurn();
+}
 // Optional: point at your own PeerJS server, e.g. localStorage 'tg-relay' =
 // {"host":"example.com","port":443,"path":"/","secure":true}. Default is PeerJS's free server.
 function relayOptions() {
   try {
-    return { ...(JSON.parse(localStorage.getItem('tg-relay') || 'null') || {}), config: RELAY_CONFIG, debug: 0 };
+    return { ...(JSON.parse(localStorage.getItem('tg-relay') || 'null') || {}), config: { iceServers }, debug: 0 };
   } catch {
-    return { config: RELAY_CONFIG, debug: 0 };
+    return { config: { iceServers }, debug: 0 };
   }
 }
 
@@ -235,7 +265,8 @@ function wrapRelay(dc, onMessage, onClose) {
 
 // Host: open the table. Calls onPlayer({ name, attach }) for each phone that joins;
 // call attach(onMessage, onClose) to get a connection. Rejects with no internet.
-export function openOnlineTable(onPlayer, timeoutMs = 8000) {
+export async function openOnlineTable(onPlayer, timeoutMs = 8000) {
+  await loadTurn();
   return new Promise((resolve, reject) => {
     if (!window.Peer) return reject(new Error('unavailable'));
     const id = 'tablegames-' + randomId();
@@ -273,7 +304,8 @@ export function openOnlineTable(onPlayer, timeoutMs = 8000) {
 }
 
 // Player: join a host's table by its id.
-export function joinOnlineTable(hostId, name, onMessage, onClose, timeoutMs = 15000) {
+export async function joinOnlineTable(hostId, name, onMessage, onClose, timeoutMs = 25000) {
+  await loadTurn();
   return new Promise((resolve, reject) => {
     if (!window.Peer) return reject(Object.assign(new Error('unavailable'), { type: 'network' }));
     const peer = new window.Peer(relayOptions());

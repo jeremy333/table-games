@@ -2,7 +2,7 @@
 // Core files are saved automatically. Games are saved separately when someone
 // opens or downloads them (see js/library.js), so adding a game never needs a
 // change here. When you change a core file, bump VERSION.
-const VERSION = 'v8';
+const VERSION = 'v9';
 const GAME_CACHE = 'tg-games'; // kept across versions
 const CORE = [
   './',
@@ -10,6 +10,7 @@ const CORE = [
   'css/style.css',
   'js/app.js',
   'js/net.js',
+  'js/config.js',
   'js/qr.js',
   'js/cards.js',
   'js/library.js',

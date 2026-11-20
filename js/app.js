@@ -3,7 +3,7 @@
 import {
   createInvite, acceptReply, answerInvite, decodeSignal, extractCode, wrapChannel, whenOpen,
 } from './net.js';
-import { openOnlineTable, joinOnlineTable, extractHostId } from './net.js';
+import { openOnlineTable, joinOnlineTable, extractHostId, relayAvailable } from './net.js';
 import { qrSvg, startScanner } from './qr.js';
 import {
   CATALOG, catalogEntry, playersText, searchGames, loadGame, getLoadedGame, gameSource,
@@ -294,6 +294,7 @@ async function goOnline() {
   renderAddBox();
   try {
     host.online = await openOnlineTable((p) => { if (app.host === host) acceptOnlinePlayer(p); });
+    host.relay = await relayAvailable();
     if (app.host !== host) return host.online.close();
     host.mode = 'online';
   } catch {
@@ -508,7 +509,11 @@ function acceptOnlinePlayer(p) {
   const { conn, opened } = p.attach((msg) => onPlayerMessage(entry, msg), () => onPlayerClosed(entry));
   entry.conn = conn;
   entry.close = () => conn.close();
-  opened.then(() => { if (entry.status === 'connecting') { entry.status = 'connected'; updateLobby(); } });
+  entry.online = true;
+  entry.timer = setTimeout(() => {
+    if (entry.status === 'connecting' && host.joining.includes(entry)) { entry.status = 'failed'; updateLobby(); }
+  }, 25000);
+  opened.then(() => { if (entry.status === 'connecting' || entry.status === 'failed') { entry.status = 'connected'; updateLobby(); } });
 }
 
 // Messages from a player's phone (both joining methods).
@@ -583,7 +588,10 @@ function updateLobby() {
       h('ul', {}, host.joining.map((e) => h('li', { class: `join-${e.status}` },
         h('div', {},
           h('strong', {}, e.name || 'New player'),
-          h('span', { class: 'join-state' }, STATUS_TEXT[e.status])),
+          h('span', { class: 'join-state' }, e.status === 'failed' && e.online ? (host.relay
+            ? 'Couldn’t connect. Have them check their internet, then scan your game code again.'
+            : 'Couldn’t connect — this Wi‑Fi blocks phones from linking directly. Turning on the relay fixes this (see README).')
+            : STATUS_TEXT[e.status])),
         h('div', { class: 'join-actions' },
           e.status === 'waiting' ? h('button', { class: 'primary', onclick: () => admit(e) }, 'Let in') : null,
           e.status === 'waiting' ? h('button', { onclick: () => decline(e) }, 'Decline') : null,
@@ -857,9 +865,12 @@ function joinOnline(hostId) {
         } catch (err) {
           app.guest = null;
           const gone = err && err.type === 'peer-unavailable';
+          const relay = await relayAvailable();
           return guestFailed(gone
             ? 'That table isn’t open anymore. Ask the host for their current game code.'
-            : 'Couldn’t reach the host. Make sure you’re on their Wi‑Fi and it has internet. If there’s no internet, the host will show a different game code — scan that one.');
+            : relay
+              ? 'Couldn’t reach the host. Check your internet connection, then scan the host’s game code again.'
+              : 'Couldn’t reach the host. This Wi‑Fi may block phones from linking directly. Ask the host to turn on the relay (see the README), or try the host’s hotspot instead.');
         }
         keepAwake();
         app.guest.conn.send({ t: 'hello', name: app.name });
