@@ -14,6 +14,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 
 /**
@@ -23,13 +25,17 @@ import java.io.IOException;
 public class MainActivity extends Activity {
     private LocalServer server;
     private WebView web;
+    private Updater updater;
+    private volatile int latestNative = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        updater = new Updater(BuildConfig.REPO, getFilesDir());
         server = startServer();
+        checkForUpdates();
 
         web = new WebView(this);
         WebSettings ws = web.getSettings();
@@ -61,7 +67,12 @@ public class MainActivity extends Activity {
 
     private LocalServer startServer() {
         for (int port = 8737; port < 8747; port++) {
-            LocalServer s = new LocalServer(path -> getAssets().open("www/" + path), port);
+            // Serve the newest downloaded site if there is one, otherwise the copy built into the app.
+            LocalServer s = new LocalServer(path -> {
+                File live = new File(updater.liveDir(), path);
+                if (live.isFile()) return new FileInputStream(live);
+                return getAssets().open("www/" + path);
+            }, port);
             try {
                 s.start();
                 return s;
@@ -72,8 +83,42 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    /** In the background: fetch the latest games and site, and see if a newer app exists. */
+    private void checkForUpdates() {
+        new Thread(() -> {
+            boolean changed = updater.updateSite();
+            latestNative = updater.latestNativeVersion();
+            if (changed && web != null) {
+                runOnUiThread(() -> web.evaluateJavascript("window.tgAppUpdated && window.tgAppUpdated()", null));
+            }
+        }).start();
+    }
+
     /** Small helpers the web page can call. */
     public class Bridge {
+        /** Where the website lives, for online games (players join there, not on this phone). */
+        @JavascriptInterface
+        public String siteUrl() {
+            String[] parts = BuildConfig.REPO.split("/");
+            return "https://" + parts[0] + ".github.io/" + parts[1] + "/";
+        }
+
+        /** {"version":n,"latest":n,"url":"..."} so the page can offer an app update. */
+        @JavascriptInterface
+        public String updateInfo() {
+            return "{\"version\":" + BuildConfig.NATIVE_VERSION + ",\"latest\":" + latestNative
+                + ",\"url\":\"" + updater.apkUrl() + "\"}";
+        }
+
+        @JavascriptInterface
+        public void openUpdate() {
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(updater.apkUrl())));
+                } catch (Exception ignored) { }
+            });
+        }
+
         @JavascriptInterface
         public void openHotspotSettings() {
             runOnUiThread(() -> {
@@ -88,6 +133,12 @@ public class MainActivity extends Activity {
                 }
             });
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (updater != null) checkForUpdates(); // back in the app: pick up anything new
     }
 
     @Override

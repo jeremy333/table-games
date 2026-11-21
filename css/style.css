@@ -345,3 +345,16 @@ body.has-chat main { padding-bottom: 5.5rem; }
 .chat-emoji button { min-height: 0; padding: 0.25rem 0.5rem; font-size: 1.15rem; border-color: transparent; background: rgba(255, 255, 255, 0.06); }
 .chat-send { display: flex; gap: 0.5rem; }
 .chat-send input { flex: 1; min-width: 0; }
+
+/* ---------- connection choice + app updates ---------- */
+.net-options { display: grid; gap: 0.7rem; margin: 1rem 0; }
+.net-option {
+  display: grid; gap: 0.25rem; text-align: left; width: 100%; padding: 0.9rem 1rem;
+  border: 1.5px solid var(--felt-line); border-radius: 14px; background: rgba(0, 0, 0, 0.12); color: var(--chalk);
+}
+.net-option strong { font-family: var(--serif); font-size: 1.2rem; }
+.net-option span { color: var(--muted); font-size: 0.92rem; line-height: 1.4; }
+.net-option.last { border-color: var(--brass); }
+.net-line { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--muted); margin: 0 0 0.6rem; }
+.update-banner { border: 1.5px solid var(--brass); border-radius: 12px; padding: 0.4rem 0.9rem 0.7rem; margin: 1rem 0 0; }
+.update-banner p { margin: 0.4rem 0; }

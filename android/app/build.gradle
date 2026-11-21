@@ -10,9 +10,13 @@ android {
         applicationId 'io.github.jeremy333.tablegames'
         minSdk 26
         targetSdk 34
-        // A new number on every build, so each update installs over the last.
-        versionCode((int) (System.currentTimeMillis() / 60000L))
-        versionName '1.0'
+        // The app's own version: bump android/native-version.txt only when the app's
+        // Java code changes. Games and site changes reach the app on their own.
+        def nativeVersion = file('../native-version.txt').text.trim().toInteger()
+        versionCode 30000000 + nativeVersion
+        versionName "1.${nativeVersion}"
+        buildConfigField 'int', 'NATIVE_VERSION', "${nativeVersion}"
+        buildConfigField 'String', 'REPO', "\"${project.findProperty('repoSlug') ?: 'jeremy333/table-games'}\""
     }
 
     // A fixed signing key kept in this folder, so updates install over each other.
@@ -35,6 +39,10 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     lint {
