@@ -382,3 +382,9 @@ body.has-chat main { padding-bottom: 5.5rem; }
 .trick-spot.active { color: var(--brass); }
 .card.empty { background: transparent; border: 1.5px dashed var(--felt-line); box-shadow: none; }
 .last-trick { font-size: 0.85rem; color: var(--muted); text-align: center; }
+
+/* ---------- game in progress (host visiting the lobby) ---------- */
+.game-banner { display: grid; gap: 0.5rem; border: 1.5px solid var(--brass); border-radius: 12px; padding: 0.6rem 0.9rem; margin: 0.4rem 0 0.8rem; background: rgba(212, 173, 58, 0.1); }
+.game-banner > div:first-child { display: grid; gap: 0.1rem; }
+.game-banner span { color: var(--muted); font-size: 0.9rem; }
+.game-banner.my-turn span { color: var(--brass); font-weight: 700; }

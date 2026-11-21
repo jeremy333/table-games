@@ -774,7 +774,10 @@ function renderOptions() {
 
 function lobbyMessage() {
   const game = getGame(app.host.gameId);
-  return { t: 'lobby', players: app.host.players.map((p) => p.name), gameId: app.host.gameId, rules: rulesText(game) };
+  return {
+    t: 'lobby', players: app.host.players.map((p) => p.name), gameId: app.host.gameId, rules: rulesText(game),
+    inGame: !!app.host.state, // a game is still going: seated players stay at the table
+  };
 }
 
 // Send a game's file to a phone that doesn't have it, in pieces.
@@ -850,11 +853,36 @@ async function renderGamePicker() {
   }) : [h('p', { class: 'note' }, `No games match “${q}”.`)]));
 }
 
+// While a game is going and the host is in the lobby: a banner to return to it.
+function gameBanner() {
+  const host = app.host;
+  if (!host.state) return null;
+  const game = getGame(host.playing);
+  const view = game.viewFor(host.state, 0);
+  const myTurn = view.turn === 0 && view.winner == null && !['trickEnd', 'handOver', 'roundOver', 'meld'].includes(view.phase);
+  return h('section', { class: 'game-banner' + (myTurn ? ' my-turn' : ''), id: 'game-banner' },
+    h('div', {},
+      h('strong', {}, `${game.name} is in progress`),
+      h('span', {}, myTurn ? 'It’s your turn!' : 'Players stay at the table while you’re here.')),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary', onclick: renderHostTable }, 'Return to game'),
+      h('button', { class: 'quiet', onclick: () => { if (confirm(`End the ${game.name} game for everyone?`)) endGame(); } }, 'End game')));
+}
+
+function updateGameBanner() {
+  const old = document.getElementById('game-banner');
+  const fresh = gameBanner();
+  if (old && fresh) old.replaceWith(fresh);
+  else if (old) old.remove();
+}
+
 function showLobby() {
   const host = app.host;
+  host.onTable = false;
   screen(
     h('button', { class: 'back', onclick: () => { if (confirm('Leave and end this game for everyone?')) endHosting(); } }, '‹ End'),
     h('h2', {}, 'Your table'),
+    gameBanner(),
     h('p', { class: 'net-line' }, h('span', {}, `Connection: ${NET_INFO[host.net].title}`),
       h('button', { class: 'quiet small-btn', onclick: changeConnection }, 'Change')),
     host.net === 'online' ? null : hotspotBox(),
@@ -1029,8 +1057,8 @@ function rejoin(entry, player) {
   const seat = host.players.indexOf(player);
   if (host.state && seat < host.state.names.length) sendView(seat);
   toast(`${player.name} reconnected`);
-  if (host.state && !document.getElementById('players')) renderHostTable();
-  else updateLobby();
+  if (host.state && host.onTable) renderHostTable();
+  else { updateLobby(); updateGameBanner(); }
 }
 
 function onPlayerClosed(entry) {
@@ -1042,7 +1070,7 @@ function onPlayerClosed(entry) {
     entry.player.conn = null; // keep their seat; their phone reconnects on its own
     toast(`${entry.player.name} lost connection — waiting for them to reconnect`);
     if (host.state) {
-      if (!document.getElementById('players')) renderHostTable();
+      if (host.onTable) renderHostTable();
     } else {
       sendToGuests(lobbyMessage);
       updateLobby();
@@ -1244,36 +1272,55 @@ function dismiss(entry) {
   updateLobby();
 }
 
-function startGame() {
+function startGame(gameId) {
   const host = app.host;
-  const game = getGame(host.gameId);
+  const id = typeof gameId === 'string' ? gameId : host.gameId;
+  const game = getGame(id);
   if (!game) return toast('That game isn’t loaded yet.');
+  if (host.state) {
+    const current = getGame(host.playing);
+    const over = current && current.viewFor(host.state, 0).winner != null;
+    if (!over && !confirm(`End the ${current ? current.name : 'current'} game and start ${game.name}?`)) return;
+  }
   host.players = host.players.filter((p, i) => i === 0 || p.conn);
   if (host.players.length < game.minPlayers || host.players.length > game.maxPlayers) {
     toast(`${game.name} needs ${game.minPlayers}–${game.maxPlayers} players.`);
     return showLobby();
   }
+  host.playing = id;
   host.state = game.setup(host.players.map((p) => p.name), optionsFor(game));
+  host.onTable = true;
   sendAllViews();
+}
+
+// End the game in progress and bring everyone back to the lobby.
+function endGame() {
+  const host = app.host;
+  host.state = null;
+  host.playing = null;
+  sendToGuests(lobbyMessage);
+  showLobby();
 }
 
 function sendView(seat) {
   const host = app.host;
-  const game = getGame(host.gameId);
+  const game = getGame(host.playing);
   const p = host.players[seat];
   if (seat >= host.state.names.length) return; // joined mid-game; plays next round
-  if (p && p.conn) p.conn.send({ t: 'view', gameId: host.gameId, view: game.viewFor(host.state, seat) });
+  if (p && p.conn) p.conn.send({ t: 'view', gameId: host.playing, view: game.viewFor(host.state, seat) });
 }
 
 function sendAllViews() {
-  app.host.players.forEach((_, seat) => { if (seat > 0) sendView(seat); });
-  renderHostTable();
+  const host = app.host;
+  host.players.forEach((_, seat) => { if (seat > 0) sendView(seat); });
+  if (host.onTable) renderHostTable();
+  else updateGameBanner(); // the host is in the lobby: just refresh the "game in progress" banner
 }
 
 function hostMove(seat, move) {
   const host = app.host;
   if (!host.state || seat < 0) return;
-  const err = getGame(host.gameId).applyMove(host.state, seat, move);
+  const err = getGame(host.playing).applyMove(host.state, seat, move);
   if (err) {
     if (seat === 0) toast(err);
     else host.players[seat].conn?.send({ t: 'error', text: err });
@@ -1284,8 +1331,9 @@ function hostMove(seat, move) {
 
 function renderHostTable() {
   const host = app.host;
-  const game = getGame(host.gameId);
+  const game = getGame(host.playing);
   const view = game.viewFor(host.state, 0);
+  host.onTable = true;
   const table = h('div', { class: 'table' });
   const waiting = host.joining.filter((e) => e.status === 'waiting').length;
   const away = host.players.filter((p, i) => i > 0 && i < host.state.names.length && !p.conn).map((p) => p.name);
@@ -1295,16 +1343,11 @@ function renderHostTable() {
     h('div', { class: 'topbar' },
       h('button', {
         class: 'back',
-        onclick: () => {
-          if (view.winner != null || confirm('Stop this game and go back to the lobby?')) {
-            host.state = null;
-            sendToGuests(lobbyMessage);
-            showLobby();
-          }
-        },
+        // Visit the lobby without ending the game (a finished game ends here).
+        onclick: () => (view.winner != null ? endGame() : showLobby()),
       }, waiting ? `‹ Lobby (${waiting} waiting)` : '‹ Lobby'),
       h('span', {}, game.name),
-      view.winner != null ? h('button', { class: 'primary', onclick: startGame }, 'Play again') : null),
+      view.winner != null ? h('button', { class: 'primary', onclick: () => startGame(host.playing) }, 'Play again') : null),
     table,
   );
   game.render(view, table, (move) => hostMove(0, move));
@@ -1607,8 +1650,9 @@ function onHostMessage(msg) {
     );
   } else if (msg.t === 'lobby') {
     g.players = msg.players;
-    g.gameId = msg.gameId;
     g.rules = msg.rules;
+    if (msg.inGame && g.view) return; // the host is just visiting the lobby; stay in the game
+    g.gameId = msg.gameId;
     g.view = null;
     if (g.admitted) showGuestLobby();
     if (g.gameId) ensureGame(g.gameId).then(() => { if (g.admitted && !g.view) showGuestLobby(); }).catch(() => {});
