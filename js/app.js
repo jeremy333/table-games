@@ -858,15 +858,16 @@ function showLobby() {
     h('p', { class: 'net-line' }, h('span', {}, `Connection: ${NET_INFO[host.net].title}`),
       h('button', { class: 'quiet small-btn', onclick: changeConnection }, 'Change')),
     host.net === 'online' ? null : hotspotBox(),
-    h('div', { id: 'joining' }),
-    h('h3', { class: 'section' }, 'Players'),
-    h('ol', { class: 'players', id: 'players' }),
     h('h3', { class: 'section' }, 'Game'),
     gamePicker(),
     h('div', { class: 'options', id: 'options' }),
     h('p', { class: 'rules', id: 'rules' }),
-    h('button', { class: 'primary big', id: 'start', onclick: startGame }),
+    // The game code, with the waiting room and player list right below it.
     h('section', { class: 'add-box', id: 'add-box' }),
+    h('div', { id: 'joining' }),
+    h('h3', { class: 'section' }, 'Players'),
+    h('ol', { class: 'players', id: 'players' }),
+    h('button', { class: 'primary big', id: 'start', onclick: startGame }),
   );
   renderGamePicker();
   renderOptions();
@@ -917,8 +918,8 @@ function renderAddBox() {
     box.replaceChildren(
       title,
       h('p', { class: 'step' }, host.net === 'online'
-        ? 'Players scan this game code with their camera (or open the texted link) and tap Join, from anywhere with internet. They’ll show up above for you to let in.'
-        : 'Players join your hotspot (Wi‑Fi code above), then scan this game code and tap Join. They’ll show up above for you to let in.'),
+        ? 'Players scan this game code with their camera (or open the texted link) and tap Join, from anywhere with internet. They’ll show up below for you to let in.'
+        : 'Players join your hotspot (Wi‑Fi code above), then scan this game code and tap Join. They’ll show up below for you to let in.'),
       qr,
       h('div', { class: 'row' },
         h('button', { onclick: () => shareLink(host.online.link, 'Join my card game:') }, 'Text the link'),
