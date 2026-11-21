@@ -2,7 +2,7 @@
 // Core files are saved automatically. Games are saved separately when someone
 // opens or downloads them (see js/library.js), so adding a game never needs a
 // change here. When you change a core file, bump VERSION.
-const VERSION = 'v20';
+const VERSION = 'v21';
 const GAME_CACHE = 'tg-games'; // kept across versions
 const CORE = [
   './',

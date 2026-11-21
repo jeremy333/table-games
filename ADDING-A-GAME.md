@@ -60,7 +60,7 @@ options: [
 ],
 ```
 
-Select values arrive as strings, so check them in `setup`. See `games/rook.js` for a full example.
+Select values arrive as strings, so check them in `setup`. See `games/birds-nest.js` for a full example.
 
 ## Testing on your computer
 

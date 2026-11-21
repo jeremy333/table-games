@@ -11,13 +11,13 @@
 
 export const CATALOG = [
   {
-    id: 'rook',
-    file: 'rook.js',
-    name: 'Rook',
+    id: 'birds-nest',
+    file: 'birds-nest.js',
+    name: 'Bird’s Nest (Rook)',
     min: 4,
     max: 4,
     blurb: 'Bid, take the nest, and win tricks with set or picked partners.',
-    tags: ['cards', 'trick-taking', 'bidding', 'partners', 'teams', 'moon'],
+    tags: ['cards', 'trick-taking', 'bidding', 'partners', 'teams', 'moon', 'bird', 'nest', 'rook', 'kentucky discard'],
   },
   {
     id: 'crazy-eights',

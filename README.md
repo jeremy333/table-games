@@ -22,7 +22,7 @@ Everyone opens the link once while they have internet. The page saves itself to 
 
 | Game | Players |
 |------|---------|
-| Rook | 4 |
+| Bird’s Nest (Rook) | 4 |
 | Hearts | 4 |
 | Pinochle | 4 (two teams) |
 | Crazy Eights | 2–7 |
@@ -37,7 +37,7 @@ Everyone opens the link once while they have internet. The page saves itself to 
 | Mancala | 2 |
 | Challenge (cards and board, teams) | 2–12 |
 
-Pick a game in the lobby by searching its name, a tag (like "cards" or "partners"), or a player count (like "4"). Rook settings are chosen in the lobby: set partners or pick partner (the bidder calls a card), the Rook card's rank (high, 10½, or low), whether the last trick is worth 20, the moon's value, and the play-to score.
+Pick a game in the lobby by searching its name, a tag (like "cards" or "partners"), or a player count (like "4"). Bird’s Nest settings are chosen in the lobby: set partners or pick partner (the bidder calls a card), the Bird card's rank (high, 10½, or low), whether the last trick is worth 20, the moon's value, and the play-to score.
 
 Want to add one? It's one game file plus one line in `games/catalog.js`. See [ADDING-A-GAME.md](ADDING-A-GAME.md).
 
