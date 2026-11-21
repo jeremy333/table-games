@@ -38,10 +38,12 @@ jobs:
 
       - name: Build the app
         working-directory: android
-        run: gradle assembleRelease --no-daemon
+        run: gradle assembleRelease --no-daemon -PrepoSlug=${{ github.repository }}
 
-      - name: Name the file
-        run: cp android/app/build/outputs/apk/release/app-release.apk TableGamesHost.apk
+      - name: Name the files
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk TableGamesHost.apk
+          cp android/native-version.txt native-version.txt
 
       - name: Publish under Releases
         uses: softprops/action-gh-release@v2
@@ -52,5 +54,7 @@ jobs:
             The Android app for hosting games on your phone's hotspot, with or without internet.
             On your Android phone, tap TableGamesHost.apk below to download and install it.
             Updated automatically each time the site changes.
-          files: TableGamesHost.apk
+          files: |
+            TableGamesHost.apk
+            native-version.txt
           make_latest: true
