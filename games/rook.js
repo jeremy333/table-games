@@ -8,6 +8,8 @@
 const MIN_BID = 100;
 const BID_STEP = 5;
 const NEST_SIZE = 5;
+const MOON_VALUES = [300, 400, 500, 1000];
+const MOON_SWAPS = [0, 1, 2];
 
 const COLORS = ['R', 'G', 'Y', 'B'];
 const COLOR_NAME = { R: 'Red', G: 'Green', Y: 'Yellow', B: 'Black' };
@@ -28,7 +30,8 @@ const OPTIONS = [
     choices: [['high', 'High — above the 1'], ['mid', 'Middle — 10½'], ['low', 'Low — below the 5']] },
   { id: 'lastTrick', label: 'Last trick', type: 'select', default: '20',
     choices: [['20', 'Worth 20 (200 points per hand)'], ['0', 'No bonus (180 points per hand)']] },
-  { id: 'moon', label: 'Moon is worth', type: 'number', default: 500, min: 50, max: 5000, step: 10 },
+  { id: 'moon', label: 'Moon is worth (default)', type: 'select', default: '500',
+    choices: [['300', '300'], ['400', '400'], ['500', '500'], ['1000', '1000']] },
   { id: 'playTo', label: 'Play to', type: 'number', default: 1000, min: 100, max: 10000, step: 50 },
 ];
 
@@ -41,7 +44,7 @@ function cleanOptions(o = {}) {
     partners: o.partners === 'pick' ? 'pick' : 'set',
     rook: ['high', 'mid', 'low'].includes(o.rook) ? o.rook : 'high',
     lastTrick: String(o.lastTrick) === '0' ? 0 : 20,
-    moon: num(o.moon, 500, 50, 5000),
+    moon: MOON_VALUES.includes(Number(o.moon)) ? Number(o.moon) : 500,
     playTo: num(o.playTo, 1000, 100, 10000),
   };
 }
@@ -53,12 +56,19 @@ function makeDeck() {
   return deck; // 45 cards: 10 each + 5 in the nest
 }
 
+// A fair random number from 0 to n-1 (no rounding bias), from the phone's secure random source.
+function randomInt(n) {
+  const limit = Math.floor(0x100000000 / n) * n;
+  const buf = new Uint32Array(1);
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+
+// Fisher-Yates: every order of the deck is equally likely, like a thorough shuffle.
 function shuffle(arr) {
   const a = arr.slice();
-  const rand = new Uint32Array(a.length);
-  crypto.getRandomValues(rand);
   for (let i = a.length - 1; i > 0; i--) {
-    const j = rand[i] % (i + 1);
+    const j = randomInt(i + 1);
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
@@ -131,9 +141,21 @@ function bidTeam(state) {
 }
 
 function dealHand(state) {
+  // Deal like a real table: one card at a time, starting left of the dealer,
+  // with a card to the nest after each of the first five rounds.
   const deck = shuffle(makeDeck());
-  state.hands = [0, 1, 2, 3].map(() => deck.splice(0, 10));
-  state.nest = deck;
+  state.hands = [[], [], [], []];
+  state.nest = [];
+  for (let round = 0; round < 10; round++) {
+    for (let k = 1; k <= 4; k++) state.hands[(state.dealer + k) % 4].push(deck.pop());
+    if (round < NEST_SIZE) state.nest.push(deck.pop());
+  }
+  state.redeal = null;
+  state.moonValue = state.opts.moon;
+  state.moonSwap = 0;
+  state.moonPartnerPlays = true;
+  state.moonWin = 'tricks';
+  state.sitOut = null; // a moon partner sitting this hand out
   state.discards = [];
   state.phase = 'bid';
   state.bid = 0;
@@ -173,11 +195,82 @@ function finishBidding(state) {
   state.turn = state.bidder;
 }
 
+// Can this player take every remaining trick no matter what anyone plays?
+// True only when it's certain: their trumps outrank every other trump and can
+// pull them all, and in every other color their cards are the highest left.
+function canClaim(state, seat) {
+  const t = state.trump;
+  const rr = state.opts.rook;
+  const mine = state.hands[seat];
+  if (!mine.length || state.trick.length) return false;
+  const others = activeSeats(state).filter((x) => x !== seat).map((x) => state.hands[x]);
+  const isTrump = (c) => colorOf(c, t) === t;
+  const str = (c) => strength(c, rr);
+  const myTrump = mine.filter(isTrump);
+  const theirTrump = others.map((h) => h.filter(isTrump));
+  const theirTop = Math.max(-1, ...theirTrump.flat().map(str));
+  if (myTrump.length) {
+    if (Math.min(...myTrump.map(str)) <= theirTop) return false;
+    if (theirTrump.some((h) => h.length > myTrump.length)) return false;
+  } else if (theirTrump.flat().length) {
+    return false;
+  }
+  for (const col of COLORS) {
+    if (col === t) continue;
+    const myCol = mine.filter((c) => colorOf(c, t) === col);
+    if (!myCol.length) continue;
+    const theirMax = Math.max(-1, ...others.flat().filter((c) => colorOf(c, t) === col).map(str));
+    if (Math.min(...myCol.map(str)) <= theirMax) return false;
+  }
+  return true;
+}
+
+// Seats playing this hand (everyone, unless a moon partner is sitting out).
+function activeSeats(state) {
+  return [0, 1, 2, 3].filter((x) => x !== state.sitOut);
+}
+
+function nextActive(state, seat) {
+  let n = (seat + 1) % 4;
+  if (n === state.sitOut) n = (n + 1) % 4;
+  return n;
+}
+
+function partnerSeat(state) {
+  return state.opts.partners === 'set' ? (state.bidder + 2) % 4 : state.partner;
+}
+
+// After trump (and the partner call): moon card swap if asked for, then play.
+function afterTrump(state) {
+  if (state.moon && state.moonSwap > 0 && partnerSeat(state) != null) {
+    state.phase = 'swapGive';
+    state.turn = state.bidder; // the bidder chooses cards from the partner's hand
+    if (state.opts.partners === 'pick' && !state.partnerShown) {
+      state.partnerShown = true;
+      say(state, `${state.names[state.partner]} is the partner (moon card swap)`);
+    }
+    say(state, `Moon: ${state.names[state.bidder]} takes ${state.moonSwap} card${state.moonSwap > 1 ? 's' : ''} from their partner`);
+  } else {
+    startMoonPlay(state);
+  }
+}
+
+// Play begins; if the moon bidder chose to go alone, the partner sits out.
+function startMoonPlay(state) {
+  if (state.moon && !state.moonPartnerPlays && partnerSeat(state) != null) {
+    state.sitOut = partnerSeat(state);
+    if (state.opts.partners === 'pick' && !state.partnerShown) state.partnerShown = true;
+    say(state, `${state.names[state.sitOut]} sits out this hand; ${state.names[state.bidder]} plays alone`);
+  }
+  state.phase = 'play';
+  state.turn = state.bidder;
+}
+
 // Everyone has seen the trick: clear it, or score the hand after the last one.
 function finishTrick(state) {
   const win = state.lastTrick.winner;
   state.trick = [];
-  if (state.hands.every((hd) => hd.length === 0)) {
+  if (activeSeats(state).every((x) => state.hands[x].length === 0)) {
     state.taken[win].push(...state.discards);
     endHand(state, win);
   } else {
@@ -194,10 +287,13 @@ function endHand(state, lastWinner) {
   const defenders = [0, 1, 2, 3].filter((s) => !isBid(s));
   const bidPts = team.reduce((sum, s) => sum + pts[s], 0);
   const bidTricks = team.reduce((sum, s) => sum + state.tricksWon[s], 0);
-  const defPts = perHand(state) - bidPts;
-  const made = state.moon ? bidTricks === 10 : bidPts >= state.bid;
+  const defPts = defenders.reduce((sum, s) => sum + pts[s], 0);
+  const defTricks = defenders.reduce((sum, s) => sum + state.tricksWon[s], 0);
+  const made = state.moon
+    ? (state.moonWin === 'points' ? defPts === 0 : defTricks === 0)
+    : bidPts >= state.bid;
   const delta = [0, 1, 2, 3].map((s) => {
-    if (state.moon) return isBid(s) ? (made ? state.opts.moon : -state.opts.moon) : 0;
+    if (state.moon) return isBid(s) ? (made ? state.moonValue : -state.moonValue) : 0;
     if (isBid(s)) return made ? bidPts : -state.bid;
     return defPts;
   });
@@ -208,7 +304,7 @@ function endHand(state, lastWinner) {
   const sign = (n) => (n > 0 ? '+' : '') + n;
   const each = state.opts.partners === 'pick' ? ' each' : '';
   state.summary = {
-    headline: `${bidNames} bid ${state.moon ? 'the moon' : state.bid} and ${made ? 'made it' : 'got set'}.`,
+    headline: `${bidNames} bid ${state.moon ? `the moon (${state.moonValue}, needing every ${state.moonWin === 'points' ? 'point' : 'trick'})` : state.bid} and ${made ? 'made it' : 'got set'}.`,
     lines: [
       `${bidNames}: took ${bidPts}, scored ${sign(delta[team[0]])}${team.length > 1 ? each : ''}`,
       `${defNames}: took ${defPts}, scored ${sign(delta[defenders[0]])}${defenders.length > 1 ? each : ''}`,
@@ -306,6 +402,14 @@ button.rook-card:disabled { filter: none; opacity: 1; }
 .trick-result { text-align: center; margin: 0.6rem 0 0.2rem; font-size: 1.05rem; }
 .ready-box { display: grid; gap: 0.5rem; margin: 0.6rem 0; }
 .ready-who { text-align: center; color: var(--muted); font-size: 0.9rem; margin: 0; }
+.redeal-box { border: 1.5px solid var(--brass); border-radius: 12px; padding: 0.4rem 0.9rem 0.7rem; margin: 0.6rem 0; display: grid; gap: 0.4rem; }
+.redeal-box p { margin: 0.3rem 0 0; }
+.redeal-ask { display: block; margin: 0 auto 0.4rem; font-size: 0.9rem; }
+.moon-panel { border: 1.5px solid var(--felt-line); border-radius: 12px; padding: 0.2rem 0.9rem 0.8rem; }
+.moon-panel[hidden] { display: none; }
+.claim-btn { margin: 0.6rem 0; }
+.trick-spot.out { opacity: 0.45; }
+.take-box { border: 1.5px solid var(--brass); border-radius: 12px; padding: 0.2rem 0.7rem 0.7rem; margin: 0.6rem 0; }
 .scoreboard.four { grid-template-columns: 1fr 1fr; }
 .called { text-align: center; margin: 0.2rem 0 0; color: var(--brass); font-size: 0.95rem; }
 .call-picker { margin: 0.8rem 0; }
@@ -322,7 +426,7 @@ button.rook-card:disabled { filter: none; opacity: 1; }
     const partners = o.partners === 'set'
       ? 'Partners sit across: players 1 & 3 vs 2 & 4, in lobby order. The high bidder takes the nest, discards 5, and names trump.'
       : 'Pick partner: the high bidder takes the nest, discards 5, names trump, and calls a card. Whoever holds it is their secret partner. Scores are kept per player.';
-    return `${partners} Bid from ${MIN_BID} by ${BID_STEP}s, or bid the moon (worth ${o.moon}) to take every trick. ` +
+    return `${partners} Bid from ${MIN_BID} by ${BID_STEP}s, or bid the moon (300, 400, 500, or 1000; swap up to 2 cards with your partner; partner plays or sits out; take every trick or every point). ` +
       `The Rook is ${ROOK_RANK_TEXT[o.rook]}. Counters: 5s = 5, 10s and 14s = 10, 1s = 15, Rook = 20` +
       (o.lastTrick ? `, plus ${o.lastTrick} and the discards for the last trick` : '; the discards go to the last trick') +
       `. Play to ${o.playTo}.`;
@@ -360,7 +464,18 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       minBid: MIN_BID,
       bidStep: BID_STEP,
       maxBid: perHand(state),
-      moonValue: o.moon,
+      moonValue: state.moon ? state.moonValue : o.moon,
+      moonDefault: o.moon,
+      moonValues: MOON_VALUES,
+      moonPartnerPlays: state.moonPartnerPlays !== false,
+      moonWin: state.moonWin || 'tricks',
+      sitOut: state.sitOut,
+      partnerHand: state.phase === 'swapGive' && seat === state.bidder ? sortHand(state.hands[partnerSeat(state)], state.trump, o.rook) : null,
+      partnerName: state.moon && partnerSeat(state) != null && (seat === state.bidder || seat === partnerSeat(state)) ? state.names[partnerSeat(state)] : null,
+      moonSwap: state.moonSwap || 0,
+      redeal: state.redeal ? { by: state.redeal.by, votes: state.redeal.votes } : null,
+      canRedeal: state.phase === 'bid' && state.bidder == null && !state.passed.some(Boolean),
+      canClaim: state.phase === 'play' && myTurn && seat === state.bidder && canClaim(state, seat),
       moon: state.moon,
       bidder: state.bidder,
       passed: state.passed,
@@ -407,9 +522,34 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       return null;
     }
 
-    if (seat !== state.turn) return "It isn't your turn.";
+    if (move.type === 'redealAsk' || move.type === 'redealVote') {
+      if (state.phase !== 'bid' || state.bidder != null || state.passed.some(Boolean)) return 'A re-deal can only be asked for before bidding starts.';
+      if (move.type === 'redealAsk') {
+        if (state.redeal) return 'A re-deal request is already waiting.';
+        state.redeal = { by: seat, votes: [null, null, null, null] };
+        state.redeal.votes[seat] = true;
+        say(state, `${state.names[seat]} asked for a re-deal`);
+        return null;
+      }
+      if (!state.redeal) return 'There’s no re-deal request.';
+      if (seat === state.redeal.by) return 'You asked for this re-deal.';
+      if (state.redeal.votes[seat] != null) return 'You already answered.';
+      state.redeal.votes[seat] = !!move.approve;
+      if (!move.approve) {
+        say(state, `${state.names[seat]} declined the re-deal`);
+        state.redeal = null;
+      } else if (state.redeal.votes.every((v) => v === true)) {
+        say(state, 'Everyone agreed: re-dealing');
+        dealHand(state);
+      }
+      return null;
+    }
+
+    if (seat !== state.turn) return seat === state.sitOut ? 'You’re sitting out this hand.' : "It isn't your turn.";
     const name = state.names[seat];
     const hand = state.hands[seat];
+
+    if (state.phase === 'bid' && state.redeal) return 'Waiting for everyone to answer the re-deal request.';
 
     if (state.phase === 'bid') {
       if (move.type === 'pass') {
@@ -418,9 +558,21 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       } else if (move.type === 'bid') {
         if (state.moon) return 'Someone already bid the moon.';
         if (move.moon) {
+          const value = move.value == null ? state.opts.moon : Number(move.value);
+          const swap = move.swap == null ? 0 : Number(move.swap);
+          const partnerPlays = move.partnerPlays !== false;
+          const win = move.win === 'points' ? 'points' : 'tricks';
+          if (!MOON_VALUES.includes(value)) return `Moon value must be ${MOON_VALUES.join(', ')}.`;
+          if (!MOON_SWAPS.includes(swap)) return 'Swap 0, 1, or 2 cards.';
           state.moon = true;
-          state.bid = state.opts.moon;
-          say(state, `${name} bid the moon!`);
+          state.moonValue = value;
+          state.moonSwap = swap;
+          state.moonPartnerPlays = partnerPlays;
+          state.moonWin = win;
+          state.bid = value;
+          const extras = [swap ? `swapping ${swap} card${swap > 1 ? 's' : ''}` : null, partnerPlays ? null : 'playing alone',
+            `needing every ${win === 'points' ? 'point' : 'trick'}`].filter(Boolean).join(', ');
+          say(state, `${name} bid the moon for ${value} (${extras})!`);
         } else {
           const amt = Number(move.amount);
           const low = state.bidder == null ? MIN_BID : state.bid + BID_STEP;
@@ -460,12 +612,8 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       if (move.type !== 'trump' || !COLORS.includes(move.color)) return 'Choose a trump color.';
       state.trump = move.color;
       say(state, `Trump is ${COLOR_NAME[move.color]}`);
-      if (state.opts.partners === 'pick') {
-        state.phase = 'call';
-      } else {
-        state.phase = 'play';
-        state.turn = state.bidder;
-      }
+      if (state.opts.partners === 'pick') state.phase = 'call';
+      else afterTrump(state);
       return null;
     }
 
@@ -477,9 +625,44 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       if (partner < 0) return 'Call a card another player holds.';
       state.called = move.card;
       state.partner = partner;
-      state.phase = 'play';
-      state.turn = state.bidder;
       say(state, `${name} called ${cardLabel(move.card)} as partner`);
+      afterTrump(state);
+      return null;
+    }
+
+    // Moon card swap: partner passes cards to the bidder, then the bidder passes the same number back.
+    if (state.phase === 'swapGive' || state.phase === 'swapBack') {
+      if (move.type !== 'swap') return `Choose ${state.moonSwap} card${state.moonSwap > 1 ? 's' : ''}.`;
+      const cards = Array.isArray(move.cards) ? move.cards : [];
+      if (cards.length !== state.moonSwap || new Set(cards).size !== cards.length) return `Choose exactly ${state.moonSwap}.`;
+      if (state.phase === 'swapGive') {
+        // The bidder takes cards out of the partner's hand.
+        const p = partnerSeat(state);
+        if (!cards.every((c) => state.hands[p].includes(c))) return "Those cards aren't in your partner's hand.";
+        state.hands[p] = state.hands[p].filter((c) => !cards.includes(c));
+        state.hands[seat].push(...cards);
+        state.phase = 'swapBack';
+        say(state, `${name} took ${cards.length} card${cards.length > 1 ? 's' : ''} from ${state.names[p]}`);
+      } else {
+        if (!cards.every((c) => hand.includes(c))) return "Those cards aren't all in your hand.";
+        state.hands[seat] = hand.filter((c) => !cards.includes(c));
+        state.hands[partnerSeat(state)].push(...cards);
+        say(state, `${name} passed ${cards.length} card${cards.length > 1 ? 's' : ''} back`);
+        startMoonPlay(state);
+      }
+      return null;
+    }
+
+    if (state.phase === 'play' && move.type === 'claim') {
+      if (seat !== state.bidder) return 'Only the bidder can claim the rest.';
+      if (!canClaim(state, seat)) return 'You can’t be sure of winning every trick yet.';
+      const left = state.hands[seat].length;
+      for (const x of activeSeats(state)) { state.taken[seat].push(...state.hands[x]); state.hands[x] = []; }
+      state.taken[seat].push(...state.discards);
+      state.tricksWon[seat] += left;
+      state.lastTrick = { cards: [], winner: seat };
+      say(state, `${name} claimed the last ${left} trick${left > 1 ? 's' : ''}`);
+      endHand(state, seat);
       return null;
     }
 
@@ -493,8 +676,8 @@ button.rook-card:disabled { filter: none; opacity: 1; }
         state.partnerShown = true;
         say(state, `${name} is the partner!`);
       }
-      if (state.trick.length < 4) {
-        state.turn = (seat + 1) % 4;
+      if (state.trick.length < activeSeats(state).length) {
+        state.turn = nextActive(state, seat);
         return null;
       }
       const win = trickWinner(state.trick, state.trump, state.opts.rook);
@@ -521,7 +704,7 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       if (text != null) e.textContent = text;
       return e;
     };
-    const inHand = ['nest', 'trump', 'call', 'play', 'trickEnd'].includes(view.phase);
+    const inHand = ['nest', 'trump', 'call', 'swapGive', 'swapBack', 'play', 'trickEnd'].includes(view.phase);
 
     // Scoreboard: teams for set partners, players for pick partner
     const board = el('div', 'scoreboard' + (view.mode === 'pick' ? ' four' : ''));
@@ -546,7 +729,9 @@ button.rook-card:disabled { filter: none; opacity: 1; }
 
     // Contract line
     if (view.bidder != null && view.phase !== 'bid') {
-      let text = `${view.names[view.bidder]} — ${view.moon ? `Moon (${view.moonValue})` : view.bid}`;
+      const moonBits = [view.moonValue, view.moonSwap ? `swap ${view.moonSwap}` : null, view.moonPartnerPlays ? null : 'alone',
+        `all ${view.moonWin}`].filter(Boolean).join(' · ');
+      let text = `${view.names[view.bidder]} — ${view.moon ? `Moon (${moonBits})` : view.bid}`;
       if (view.trump) text += ` · ${COLOR_NAME[view.trump]} trump`;
       const c = el('p', 'contract', text);
       if (view.trump) c.dataset.color = view.trump;
@@ -566,7 +751,20 @@ button.rook-card:disabled { filter: none; opacity: 1; }
     } else if (view.phase === 'trickEnd') {
       statusText = 'Trick over';
     } else if (myTurn) {
-      statusText = { bid: 'Your bid', nest: `Discard ${view.nestSize} cards`, trump: 'Name trump', call: 'Call your partner’s card', play: 'Your turn' }[view.phase];
+      const n = view.moonSwap;
+      statusText = {
+        bid: view.redeal ? 'Re-deal requested' : 'Your bid', nest: `Discard ${view.nestSize} cards`, trump: 'Name trump', call: 'Call your partner’s card',
+        swapGive: `Take ${n} card${n > 1 ? 's' : ''} from ${view.partnerName}’s hand`,
+        swapBack: `Pass ${n} card${n > 1 ? 's' : ''} back to your partner`, play: 'Your turn',
+      }[view.phase];
+    } else if (view.sitOut === view.seat && view.phase === 'play') {
+      statusText = 'You’re sitting out this hand';
+    } else if (view.phase === 'swapGive' && view.partnerName && view.seat !== view.bidder) {
+      statusText = `${view.names[view.bidder]} is choosing cards from your hand`;
+    } else if (view.phase === 'swapGive' || view.phase === 'swapBack') {
+      statusText = 'Moon: partners are swapping cards';
+    } else if (view.phase === 'bid' && view.redeal) {
+      statusText = 'Re-deal requested';
     } else {
       const doing = { bid: 'bidding', nest: 'taking the nest', trump: 'naming trump', call: 'calling a partner', play: 'playing' }[view.phase];
       statusText = `${view.names[view.turn]} is ${doing}`;
@@ -594,7 +792,33 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       });
       root.append(bids);
 
-      if (myTurn) {
+      // Re-deal: anyone may ask before bidding starts; everyone else must approve.
+      if (view.redeal) {
+        const r = view.redeal;
+        const box = el('div', 'redeal-box');
+        const asker = r.by === view.seat ? 'You' : view.names[r.by];
+        box.append(el('p', '', `${asker} asked for a re-deal.`));
+        const waiting = view.names.filter((_, s) => r.votes[s] == null);
+        if (r.by !== view.seat && r.votes[view.seat] == null) {
+          const row = el('div', 'row');
+          const yes = el('button', 'primary', 'Approve re-deal');
+          yes.addEventListener('click', () => send({ type: 'redealVote', approve: true }));
+          const no = el('button', '', 'Decline');
+          no.addEventListener('click', () => send({ type: 'redealVote', approve: false }));
+          row.append(yes, no);
+          box.append(row);
+        }
+        if (waiting.length) box.append(el('p', 'ready-who', `Waiting for: ${waiting.join(', ')}`));
+        root.append(box);
+      } else if (view.canRedeal) {
+        const ask = el('button', 'quiet redeal-ask', 'Ask for a re-deal');
+        ask.addEventListener('click', () => {
+          if (confirm('Ask everyone for a re-deal? All other players must approve.')) send({ type: 'redealAsk' });
+        });
+        root.append(ask);
+      }
+
+      if (myTurn && !view.redeal) {
         let amount = view.bidder == null ? view.minBid : view.bid + view.bidStep;
         const low = amount;
         const panel = el('div', 'bid-panel');
@@ -619,13 +843,44 @@ button.rook-card:disabled { filter: none; opacity: 1; }
         bidBtn.addEventListener('click', () => send({ type: 'bid', amount }));
         const passBtn = el('button', '', 'Pass');
         passBtn.addEventListener('click', () => send({ type: 'pass' }));
-        const moonBtn = el('button', '', `🌙 Moon (${view.moonValue})`);
-        moonBtn.addEventListener('click', () => {
-          const who = view.mode === 'set' ? 'Your team' : 'You and your partner';
-          if (confirm(`Bid the moon for ${view.moonValue}? ${who} must take every trick.`)) send({ type: 'bid', moon: true });
-        });
+        const moonBtn = el('button', '', '🌙 Moon…');
         actions.append(bidBtn, passBtn, moonBtn);
         panel.append(row, actions);
+
+        // Moon: four quick choices, then bid.
+        const moon = el('div', 'moon-panel');
+        moon.hidden = true;
+        const choice = (label, opts, def) => {
+          const sel = el('select');
+          opts.forEach(([v, t]) => {
+            const o = el('option', '', t);
+            o.value = String(v);
+            if (String(v) === String(def)) o.selected = true;
+            sel.append(o);
+          });
+          const f = el('label', 'field');
+          f.append(el('span', '', label), sel);
+          moon.append(f);
+          return sel;
+        };
+        moon.append(el('p', 'note', 'Choose how this moon works, then bid.'));
+        const valueSel = choice('Hand value', view.moonValues.map((v) => [v, String(v)]), view.moonDefault);
+        const swapSel = choice('Cards swapped with partner', [[0, 'None'], [1, '1 card'], [2, '2 cards']], 0);
+        const playsSel = choice('Partner plays the hand', [['yes', 'Yes'], ['no', 'No — partner sits out']], 'yes');
+        const winSel = choice('To succeed, take all the', [['tricks', 'Tricks'], ['points', 'Points']], 'tricks');
+        const go = el('button', 'primary big', 'Bid the moon');
+        go.addEventListener('click', () => {
+          const value = Number(valueSel.value);
+          const swap = Number(swapSel.value);
+          const partnerPlays = playsSel.value === 'yes';
+          const win = winSel.value;
+          const parts = [`for ${value}`, swap ? `swap ${swap} card${swap > 1 ? 's' : ''} with your partner` : null,
+            partnerPlays ? null : 'partner sits out', `take every ${win === 'points' ? 'point' : 'trick'}`].filter(Boolean);
+          if (confirm(`Bid the moon: ${parts.join(', ')}?`)) send({ type: 'bid', moon: true, value, swap, partnerPlays, win });
+        });
+        moon.append(go);
+        moonBtn.addEventListener('click', () => { moon.hidden = !moon.hidden; });
+        panel.append(moon);
         root.append(panel);
       }
     }
@@ -668,6 +923,12 @@ button.rook-card:disabled { filter: none; opacity: 1; }
         const s = (view.seat + k) % 4;
         const spot = el('div', 'trick-spot' + (ended ? (s === view.trickWinner ? ' won' : '') : (s === view.turn ? ' active' : '')));
         const played = view.trick.find((t) => t.seat === s);
+        if (s === view.sitOut) {
+          spot.classList.add('out');
+          spot.append(el('div', 'card empty'), el('span', '', `${k === 0 ? 'You' : view.names[s]} (out)`));
+          trickBox.append(spot);
+          continue;
+        }
         spot.append(played ? rookCardEl(played.card, view.trump) : el('div', 'card empty'));
         spot.append(el('span', '', k === 0 ? 'You' : view.names[s]));
         trickBox.append(spot);
@@ -683,9 +944,44 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       }
     }
 
+    // Claim the rest: only offered when winning every remaining trick is certain.
+    if (view.canClaim) {
+      const claim = el('button', 'primary big claim-btn', `Claim the rest — you win all ${view.hand.length} remaining tricks`);
+      claim.addEventListener('click', () => {
+        if (confirm('Claim every remaining trick and end the hand?')) send({ type: 'claim' });
+      });
+      root.append(claim);
+    }
+
     // Your hand
     const handEl = el('div', 'hand');
-    const picking = view.phase === 'nest' && myTurn;
+    // Moon swap, step 1: the bidder picks cards from the partner's hand.
+    if (view.phase === 'swapGive' && myTurn && view.partnerHand) {
+      const takeBox = el('div', 'take-box');
+      takeBox.append(el('p', 'note', `${view.partnerName}’s hand: tap ${view.moonSwap} card${view.moonSwap > 1 ? 's' : ''} to take.`));
+      const row = el('div', 'hand');
+      const chosen = new Set();
+      const takeBtn = el('button', 'primary big', `Take 0 of ${view.moonSwap}`);
+      takeBtn.disabled = true;
+      view.partnerHand.forEach((card) => row.append(rookCardEl(card, view.trump, {
+        playable: true,
+        onClick: (cd, node) => {
+          if (chosen.has(cd)) chosen.delete(cd); else if (chosen.size < view.moonSwap) chosen.add(cd);
+          node.classList.toggle('selected', chosen.has(cd));
+          takeBtn.disabled = chosen.size !== view.moonSwap;
+          takeBtn.textContent = `Take ${chosen.size} of ${view.moonSwap}`;
+        },
+      })));
+      takeBtn.addEventListener('click', () => send({ type: 'swap', cards: [...chosen] }));
+      takeBox.append(row, takeBtn);
+      root.append(takeBox);
+      root.append(el('p', 'note', 'Your hand:'));
+    }
+
+    const swapping = view.phase === 'swapBack' && myTurn;
+    const picking = (view.phase === 'nest' || swapping) && myTurn;
+    const need = swapping ? view.moonSwap : view.nestSize;
+    const verb = swapping ? 'Pass' : 'Discard';
     const picked = new Set();
     let confirmBtn = null;
     for (const card of view.hand) {
@@ -694,10 +990,10 @@ button.rook-card:disabled { filter: none; opacity: 1; }
         playable: playable || picking,
         onClick: (cd, node) => {
           if (picking) {
-            if (picked.has(cd)) picked.delete(cd); else if (picked.size < view.nestSize) picked.add(cd);
+            if (picked.has(cd)) picked.delete(cd); else if (picked.size < need) picked.add(cd);
             node.classList.toggle('selected', picked.has(cd));
-            confirmBtn.disabled = picked.size !== view.nestSize;
-            confirmBtn.textContent = `Discard ${picked.size} of ${view.nestSize}`;
+            confirmBtn.disabled = picked.size !== need;
+            confirmBtn.textContent = `${verb} ${picked.size} of ${need}`;
           } else {
             send({ type: 'play', card: cd });
           }
@@ -705,9 +1001,9 @@ button.rook-card:disabled { filter: none; opacity: 1; }
       }));
     }
     if (picking) {
-      confirmBtn = el('button', 'primary big', `Discard 0 of ${view.nestSize}`);
+      confirmBtn = el('button', 'primary big', `${verb} 0 of ${need}`);
       confirmBtn.disabled = true;
-      confirmBtn.addEventListener('click', () => send({ type: 'discard', cards: [...picked] }));
+      confirmBtn.addEventListener('click', () => send(swapping ? { type: 'swap', cards: [...picked] } : { type: 'discard', cards: [...picked] }));
       root.append(confirmBtn);
     }
     root.append(handEl);
