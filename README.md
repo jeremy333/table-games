@@ -22,9 +22,17 @@ Everyone opens the link once while they have internet. The page saves itself to 
 
 | Game | Players |
 |------|---------|
-| Rook | 4 (two teams of partners) |
+| Rook | 4 |
+| Hearts | 4 |
+| Pinochle | 4 (two teams) |
 | Crazy Eights | 2–7 |
-| Domination (deck-building; card-for-card with the classic base game, renamed) | 2–4 |
+| Go Fish | 2–6 |
+| Domination (deck-building) | 2–4 |
+| Checkers | 2 |
+| Chess | 2 |
+| Mexican Train (dominoes) | 2–8 |
+| Farkle (dice) | 2–8 |
+| Yacht (dice) | 1–8 |
 
 Pick a game in the lobby by searching its name, a tag (like "cards" or "partners"), or a player count (like "4"). Rook settings are chosen in the lobby: set partners or pick partner (the bidder calls a card), the Rook card's rank (high, 10½, or low), whether the last trick is worth 20, the moon's value, and the play-to score.
 

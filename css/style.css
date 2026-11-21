@@ -172,7 +172,7 @@ input, select {
 }
 
 button.card { cursor: pointer; transition: transform 0.12s ease; }
-button.card:disabled { opacity: 1; filter: saturate(0.4) brightness(0.8); }
+button.card:disabled { opacity: 1; filter: none; } /* full color; playable cards lift instead */
 button.card.playable { outline: 2px solid var(--brass); outline-offset: 2px; transform: translateY(-6px); }
 button.card.playable:active { transform: translateY(-2px); }
 
@@ -358,3 +358,25 @@ body.has-chat main { padding-bottom: 5.5rem; }
 .net-line { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--muted); margin: 0 0 0.6rem; }
 .update-banner { border: 1.5px solid var(--brass); border-radius: 12px; padding: 0.4rem 0.9rem 0.7rem; margin: 1rem 0 0; }
 .update-banner p { margin: 0.4rem 0; }
+
+/* ---------- shared trick-game pieces (end-of-trick review, Ready) ---------- */
+.trick-spot.won .card { outline: 3px solid var(--brass); outline-offset: 3px; }
+.trick-spot.won > span { color: var(--brass); font-weight: 700; }
+.trick-result { text-align: center; margin: 0.6rem 0 0.2rem; font-size: 1.05rem; }
+.ready-box { display: grid; gap: 0.5rem; margin: 0.6rem 0; }
+.ready-who { text-align: center; color: var(--muted); font-size: 0.9rem; margin: 0; }
+.bid-list { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; color: var(--muted); }
+.bid-list .active { color: var(--brass); }
+.bid-panel { display: grid; gap: 0.7rem; margin: 0.6rem 0 1rem; }
+.bid-row { display: flex; align-items: center; justify-content: center; gap: 1rem; }
+.bid-row button { width: 3rem; font-size: 1.4rem; padding: 0; }
+.bid-amount { font-family: var(--serif); font-size: 2.2rem; min-width: 4.5rem; text-align: center; }
+.contract { text-align: center; margin: 0.6rem 0 0; color: var(--chalk); }
+.trick {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem;
+  padding: 1rem 0; border-block: 1px solid var(--felt-line); text-align: center;
+}
+.trick-spot { display: grid; justify-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+.trick-spot.active { color: var(--brass); }
+.card.empty { background: transparent; border: 1.5px dashed var(--felt-line); box-shadow: none; }
+.last-trick { font-size: 0.85rem; color: var(--muted); text-align: center; }

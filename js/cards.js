@@ -12,12 +12,19 @@ export function standardDeck() {
   return deck;
 }
 
+// A fair random number from 0 to n-1, from the phone's secure random source (no rounding bias).
+export function randomInt(n) {
+  const limit = Math.floor(0x100000000 / n) * n;
+  const buf = new Uint32Array(1);
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+
+// Fisher-Yates: every order of the deck is equally likely.
 export function shuffle(arr) {
   const a = arr.slice();
-  const rand = new Uint32Array(a.length);
-  crypto.getRandomValues(rand);
   for (let i = a.length - 1; i > 0; i--) {
-    const j = rand[i] % (i + 1);
+    const j = randomInt(i + 1);
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;

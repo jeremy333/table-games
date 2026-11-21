@@ -37,4 +37,44 @@ export const CATALOG = [
     blurb: 'Build your deck from a shared supply: 26 kingdom cards, 10 per game.',
     tags: ['deck-building', 'dominion', 'strategy', 'cards', 'kingdom'],
   },
+  {
+    id: 'hearts', file: 'hearts.js', name: 'Hearts', min: 4, max: 4,
+    blurb: 'Dodge hearts and the Queen of Spades, or take them all and shoot the moon.',
+    tags: ['cards', 'trick-taking', 'passing', 'classic'],
+  },
+  {
+    id: 'pinochle', file: 'pinochle.js', name: 'Pinochle', min: 4, max: 4,
+    blurb: 'Partnership bidding, meld, and tricks with the 48-card deck.',
+    tags: ['cards', 'trick-taking', 'bidding', 'partners', 'meld', 'teams'],
+  },
+  {
+    id: 'go-fish', file: 'go-fish.js', name: 'Go Fish', min: 2, max: 6,
+    blurb: 'Ask for cards, go fish, and collect books of four.',
+    tags: ['cards', 'family', 'kids', 'easy'],
+  },
+  {
+    id: 'checkers', file: 'checkers.js', name: 'Checkers', min: 2, max: 2,
+    blurb: 'Jump, double-jump, and crown your kings.',
+    tags: ['board', 'strategy', 'classic', 'two-player', 'draughts'],
+  },
+  {
+    id: 'chess', file: 'chess.js', name: 'Chess', min: 2, max: 2,
+    blurb: 'The full game: castling, en passant, promotion, and checkmate.',
+    tags: ['board', 'strategy', 'classic', 'two-player'],
+  },
+  {
+    id: 'mexican-train', file: 'mexican-train.js', name: 'Mexican Train', min: 2, max: 8,
+    blurb: 'Dominoes for a crowd: build trains from the engine, cover doubles, go out first.',
+    tags: ['dominoes', 'tiles', 'family', 'group'],
+  },
+  {
+    id: 'farkle', file: 'farkle.js', name: 'Farkle', min: 2, max: 8,
+    blurb: 'Roll six dice, bank points or push your luck — don’t Farkle!',
+    tags: ['dice', 'party', 'luck', 'group'],
+  },
+  {
+    id: 'yacht', file: 'yacht.js', name: 'Yacht', min: 1, max: 8,
+    blurb: 'Five dice, three rolls, thirteen boxes to fill. Roll a Yacht for 50!',
+    tags: ['dice', 'family', 'scorecard', 'yahtzee'],
+  },
 ];
