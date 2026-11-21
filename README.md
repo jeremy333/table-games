@@ -33,6 +33,9 @@ Everyone opens the link once while they have internet. The page saves itself to 
 | Mexican Train (dominoes) | 2–8 |
 | Farkle (dice) | 2–8 |
 | Yacht (dice) | 1–8 |
+| Four in a Row | 2 |
+| Mancala | 2 |
+| Challenge (cards and board, teams) | 2–12 |
 
 Pick a game in the lobby by searching its name, a tag (like "cards" or "partners"), or a player count (like "4"). Rook settings are chosen in the lobby: set partners or pick partner (the bidder calls a card), the Rook card's rank (high, 10½, or low), whether the last trick is worth 20, the moon's value, and the play-to score.
 

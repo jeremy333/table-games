@@ -77,4 +77,19 @@ export const CATALOG = [
     blurb: 'Five dice, three rolls, thirteen boxes to fill. Roll a Yacht for 50!',
     tags: ['dice', 'family', 'scorecard', 'yahtzee'],
   },
+  {
+    id: 'four-in-a-row', file: 'four-in-a-row.js', name: 'Four in a Row', min: 2, max: 2,
+    blurb: 'Drop discs and line up four before your opponent does.',
+    tags: ['board', 'two-player', 'quick', 'connect four', 'family'],
+  },
+  {
+    id: 'mancala', file: 'mancala.js', name: 'Mancala', min: 2, max: 2,
+    blurb: 'Sow seeds around the board, capture, and fill your store.',
+    tags: ['board', 'two-player', 'strategy', 'kalah', 'classic'],
+  },
+  {
+    id: 'challenge', file: 'challenge.js', name: 'Challenge', min: 2, max: 12,
+    blurb: 'Play cards to claim spaces and make rows of five with your team.',
+    tags: ['cards', 'board', 'teams', 'partners', 'sequence', 'group'],
+  },
 ];
