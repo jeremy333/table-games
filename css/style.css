@@ -263,7 +263,9 @@ h3.section { font-family: var(--serif); font-weight: 400; font-size: 1.15rem; co
 
 /* ---------- game picker + library ---------- */
 .game-picker { display: grid; gap: 0.5rem; margin: 0.4rem 0 0.8rem; }
-.game-list { display: grid; gap: 0.45rem; max-height: 22rem; overflow-y: auto; padding: 0.15rem; }
+/* A column that scrolls; rows never shrink, however many games there are. */
+.game-list { display: flex; flex-direction: column; gap: 0.45rem; max-height: 22rem; overflow-y: auto; padding: 0.15rem; -webkit-overflow-scrolling: touch; }
+.game-list > * { flex: none; }
 .game-option {
   display: grid; gap: 0.1rem; text-align: left; width: 100%;
   border: 1.5px solid var(--felt-line); border-radius: 12px; padding: 0.6rem 0.8rem;
