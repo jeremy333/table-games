@@ -92,4 +92,9 @@ export const CATALOG = [
     blurb: 'Play cards to claim spaces and make rows of five with your team.',
     tags: ['cards', 'board', 'teams', 'partners', 'sequence', 'group'],
   },
+  {
+    id: 'reversi', file: 'reversi.js', name: 'Reversi', min: 2, max: 2,
+    blurb: 'Trap and flip your opponent’s discs. Most discs at the end wins.',
+    tags: ['board', 'strategy', 'classic', 'two-player', 'othello'],
+  },
 ];
