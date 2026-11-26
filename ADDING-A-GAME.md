@@ -29,6 +29,8 @@ export default {
   rules: 'One or two sentences shown in the lobby.', // or rules(options) { return '...' }
   options: [ ... ],          // optional table settings (see below)
   styles: `...css...`,       // optional styles used only by this game
+  teams: true,               // optional: partners sit across (seats 1 & 3 vs 2 & 4), and the
+                             // host picks partners in the lobby. Can be teams(options) { ... }
 
   setup(names, options) { ... },        // host only: return the full game state
   viewFor(state, seat) { ... },         // host only: what player `seat` may see
