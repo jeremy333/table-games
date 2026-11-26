@@ -3,7 +3,7 @@
 import {
   createInvite, acceptReply, answerInvite, decodeSignal, extractCode, wrapChannel, whenOpen,
 } from './net.js';
-import { openOnlineTable, joinOnlineTable, extractHostId, relayAvailable } from './net.js';
+import { openOnlineTable, joinOnlineTable, extractHostId, relayAvailable, newTableId } from './net.js';
 import { qrSvg, startScanner } from './qr.js';
 import {
   CATALOG, catalogEntry, playersText, searchGames, loadGame, getLoadedGame, gameSource,
@@ -80,6 +80,7 @@ function hostChat(from, text) {
   const msg = { from, text: clean, at: Date.now() };
   host.chat = [...(host.chat || []), msg].slice(-100);
   sendToGuests(() => ({ t: 'chat', msg }));
+  saveTable();
   receiveChat(msg);
 }
 
@@ -174,6 +175,7 @@ function renderChat() {
             if (!confirm('Clear the chat for everyone?')) return;
             app.host.chat = [];
             sendToGuests(() => ({ t: 'chatClear' }));
+            saveTable();
             chatState.msgs = [];
             renderChat();
           },
@@ -305,6 +307,195 @@ document.addEventListener('visibilitychange', () => {
   if (app.host && app.host.mode === 'local' && document.visibilityState === 'visible') refreshLocalAddress();
 });
 
+// ---------- paused tables (all games) ----------
+// The host's phone saves the table after every change, so closing the app or
+// losing the page pauses the game instead of ending it. Players keep their seat
+// and wait; when the host comes back they reconnect on their own.
+
+const TABLE_KEY = 'tg-table';
+const SEAT_KEY = 'tg-seat';
+
+function readJSON(key) {
+  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
+}
+
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or blocked */ }
+}
+
+function saveTable() {
+  const host = app.host;
+  if (!host || host.ending || host.closingOut) return;
+  writeJSON(TABLE_KEY, {
+    v: 1,
+    savedAt: Date.now(),
+    tableId: host.tableId,
+    net: host.net,
+    players: host.players.map((p) => ({ name: p.name, pid: p.pid || null })),
+    gameId: host.gameId,
+    playing: host.playing || null,
+    state: host.state || null,
+    chat: (host.chat || []).slice(-CHAT_KEEP),
+  });
+}
+
+function savedTable() {
+  const t = readJSON(TABLE_KEY);
+  return t && t.v === 1 && Array.isArray(t.players) && t.players.length ? t : null;
+}
+
+function clearSavedTable() {
+  localStorage.removeItem(TABLE_KEY);
+}
+
+function tableSummary(t) {
+  const name = (t.playing && catalogEntry(t.playing)?.name) || null;
+  const others = t.players.slice(1).map((p) => p.name);
+  const who = others.length ? `with ${others.join(', ')}` : 'with no players yet';
+  return name ? `${name} ${who}` : `Your table ${who}`;
+}
+
+// Players: remember the table so they can find their way back to their seat.
+function saveSeat(g) {
+  if (!g.seat) return;
+  writeJSON(SEAT_KEY, { ...g.seat, host: g.host || g.seat.host || '', savedAt: Date.now() });
+}
+
+function clearSeat() {
+  localStorage.removeItem(SEAT_KEY);
+}
+
+function savedSeat() {
+  const s = readJSON(SEAT_KEY);
+  // A seat is only useful for a few days; after that the table is surely gone.
+  return s && s.hostId && Date.now() - (s.savedAt || 0) < 3 * 24 * 3600 * 1000 ? s : null;
+}
+
+// Rebuild the host from the saved table and open it on the same link.
+async function resumeTable(opts = {}) {
+  const t = savedTable();
+  if (!t) return showHome();
+  resetChat();
+  app.host = {
+    players: t.players.map((p, i) => ({ name: i === 0 ? (app.name || p.name) : p.name, pid: i === 0 ? playerId() : p.pid, conn: null })),
+    joining: [],
+    net: t.net || 'hotspot',
+    mode: 'checking',
+    online: null,
+    invites: new Map(),
+    used: new Set(),
+    current: null,
+    making: null,
+    gameId: t.gameId && catalogEntry(t.gameId) ? t.gameId : CATALOG[0].id,
+    options: readJSON('tg-options') || {},
+    state: t.state || null,
+    playing: t.playing || null,
+    chat: Array.isArray(t.chat) ? t.chat : [],
+    tableId: t.tableId || newTableId(),
+    resuming: true,
+    endingOnly: !!opts.endOnly,
+  };
+  const host = app.host;
+  chatState.msgs = host.chat.slice(-CHAT_KEEP);
+  keepAwake();
+
+  if (host.endingOnly) {
+    screen(h('h2', {}, 'Ending the table…'), h('p', { class: 'status mine' }, 'Letting everyone know the game is over.'));
+  } else {
+    screen(h('h2', {}, 'Reopening your table…'), h('p', { class: 'status mine' }, 'Getting your game back.'));
+  }
+
+  // The game files this table needs.
+  try {
+    if (host.playing) await loadGame(host.playing);
+  } catch {
+    if (app.host !== host) return;
+    toast('This phone couldn’t load the game. Connect to the internet and try again.');
+    app.host = null;
+    return showHome();
+  }
+  loadGame(host.gameId).catch(() => {});
+  if (app.host !== host) return;
+
+  if (app.local && app.local.isHostPhone && host.net !== 'online') connectLocalHost();
+  else goOnline();
+
+  if (host.endingOnly) {
+    // Players reconnect every few seconds while they wait; tell each one, then close.
+    setTimeout(() => { if (app.host === host) finishEnding(); }, 12000);
+    return;
+  }
+  host.resuming = false;
+  if (host.state && getGame(host.playing)) renderHostTable();
+  else showLobby();
+  saveTable();
+  toast('Your table is back. Players will reconnect on their own.');
+}
+
+// Close a resumed table that's only open to tell players it ended.
+function finishEnding() {
+  clearSavedTable();
+  endHosting();
+}
+
+// Host leaving the table: pause it for everyone, or end it.
+function showLeaveChoice() {
+  const host = app.host;
+  const back = () => (host.state && host.onTable ? renderHostTable() : showLobby());
+  screen(
+    h('button', { class: 'back', onclick: back }, '‹ Back'),
+    h('h2', {}, 'Leave the table?'),
+    h('p', {}, 'If you pause, everyone keeps their seat and their phone waits for you. Open Table Games again any time and tap Resume.'),
+    h('div', { class: 'stack' },
+      h('button', { class: 'primary big', onclick: pauseHosting }, 'Pause and leave'),
+      h('button', { class: 'big', onclick: () => { if (confirm('End this table for everyone? The game can’t be resumed.')) { clearSavedTable(); endHosting(); } } }, 'End the table for everyone'),
+      h('button', { class: 'quiet', onclick: back }, 'Stay')),
+  );
+}
+
+function pauseHosting() {
+  const host = app.host;
+  if (!host) return showHome();
+  saveTable();
+  sendToGuests(() => ({ t: 'hostPaused' }));
+  host.closingOut = true;
+  endHosting(false, { keepSave: true });
+}
+
+// The page is closing (app swiped away, tab closed): save, and tell players
+// the table is paused so they start waiting right away.
+window.addEventListener('pagehide', () => {
+  if (!app.host || app.host.ending || app.host.endingOnly) return;
+  saveTable();
+  try { sendToGuests(() => ({ t: 'hostPaused' })); } catch { /* closing anyway */ }
+});
+
+function pausedTableBanner() {
+  const t = savedTable();
+  if (!t) return null;
+  const mins = Math.max(1, Math.round((Date.now() - (t.savedAt || Date.now())) / 60000));
+  const ago = mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins / 60)} hr ago` : `${Math.round(mins / 1440)} days ago`;
+  return h('section', { class: 'game-banner paused-banner' },
+    h('div', {},
+      h('strong', {}, 'Your table is paused'),
+      h('span', {}, `${tableSummary(t)} · paused ${ago}. Everyone is waiting for you.`)),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary', onclick: () => resumeTable() }, 'Resume'),
+      h('button', { class: 'quiet', onclick: () => { if (confirm('End this table for everyone? The game can’t be resumed.')) resumeTable({ endOnly: true }); } }, 'End it')));
+}
+
+function seatBanner() {
+  const seat = savedSeat();
+  if (!seat || savedTable()) return null;
+  return h('section', { class: 'game-banner paused-banner' },
+    h('div', {},
+      h('strong', {}, `Your seat at ${seat.host ? seat.host + '’s' : 'a'} table`),
+      h('span', {}, 'Go back to the table you left. Your seat and cards are waiting.')),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary', onclick: () => { if (!needName()) connectOnline(seat.hostId, seat.net, true); } }, 'Return to table'),
+      h('button', { class: 'quiet', onclick: () => { clearSeat(); showHome(); } }, 'Forget it')));
+}
+
 // ---------- home ----------
 
 function showHome() {
@@ -319,9 +510,22 @@ function showHome() {
     h('header', { class: 'hero' },
       h('h1', {}, 'Table Games'),
       h('p', {}, 'Card games across everyone’s phones. No internet needed — just the same Wi‑Fi or hotspot.')),
+    pausedTableBanner(),
+    seatBanner(),
     nameField(),
     h('div', { class: 'stack' },
-      h('button', { class: 'primary big', onclick: () => { if (!needName()) startHosting(); } }, 'Host a game'),
+      h('button', {
+        class: 'primary big',
+        onclick: () => {
+          if (needName()) return;
+          if (savedTable()) {
+            if (!confirm('You have a paused table. Starting a new one ends it for everyone. Continue?')) return;
+            app.afterEnding = startHosting;
+            return resumeTable({ endOnly: true });
+          }
+          startHosting();
+        },
+      }, 'Host a game'),
       h('button', { class: 'big', onclick: () => { if (!needName()) showJoinScan(); } }, 'Join a game'),
       h('button', { class: 'quiet', onclick: showLibrary }, 'Games & offline downloads'),
       app.local ? null : h('button', { class: 'quiet', onclick: () => showOfflineHelp(showHome) }, 'Hosting with no internet?')),
@@ -560,7 +764,10 @@ function openTable(net) {
     gameId: localStorage.getItem('tg-last-game') || CATALOG[0].id,
     options: JSON.parse(localStorage.getItem('tg-options') || '{}'), // per game, remembered
     state: null,
+    tableId: newTableId(), // the table's link; kept if the host leaves and comes back
+    chat: [],
   };
+  app.host.players[0].pid = playerId();
   if (!catalogEntry(app.host.gameId)) app.host.gameId = CATALOG[0].id;
   keepAwake();
   showLobby();
@@ -569,12 +776,15 @@ function openTable(net) {
   // go through the internet like the website.
   if (app.local && app.local.isHostPhone && net !== 'online') connectLocalHost();
   else goOnline();
+  saveTable();
 }
 
 // Back to the connection choice (only before anyone has joined).
 function changeConnection() {
   const host = app.host;
   if (host.players.length > 1 && !confirm('Changing how everyone connects will disconnect the players at your table. Continue?')) return;
+  sendToGuests(() => ({ t: 'tableEnded' }));
+  clearSavedTable();
   endHosting(true);
   startHosting();
 }
@@ -617,7 +827,7 @@ function connectLocalHost() {
     }
   };
   ws.onclose = () => {
-    if (app.host === host && !host.ending) toast('The table’s connection stopped. Close and reopen the app to start a new table.');
+    if (app.host === host && !host.ending) toast('The table’s connection stopped. Close and reopen the app, then tap Resume.');
   };
 }
 
@@ -696,19 +906,30 @@ function guestFailedLocal() {
 }
 
 // Try one-scan joining; if the hotspot has no internet, switch to offline joining.
-async function goOnline() {
+async function goOnline(attempt = 0) {
   const host = app.host;
   host.mode = 'checking';
   renderAddBox();
   try {
-    host.online = await openOnlineTable((p) => { if (app.host === host) acceptOnlinePlayer(p); });
+    host.online = await openOnlineTable((p) => { if (app.host === host) acceptOnlinePlayer(p); }, 8000, host.tableId);
     if (window.TGHost && window.TGHost.siteUrl) host.online.link = window.TGHost.siteUrl() + '#host=' + host.online.id;
     host.online.link += `&net=${host.net}`;
     host.relay = await relayAvailable();
     if (app.host !== host) return host.online.close();
     host.mode = 'online';
-  } catch {
+  } catch (err) {
     if (app.host !== host) return;
+    // Reopening a table: its link may still be held by the old page for up to a
+    // minute (for example, after a phone lost signal). Keep trying the same link.
+    if (err && err.type === 'unavailable-id' && attempt < 24) {
+      setTimeout(() => { if (app.host === host) goOnline(attempt + 1); }, 5000);
+      return;
+    }
+    if (err && err.type === 'unavailable-id') {
+      host.tableId = newTableId(); // give up on the old link; players rescan the new code
+      saveTable();
+      return goOnline(0);
+    }
     host.mode = 'offline';
     ensureInvite();
   }
@@ -741,6 +962,7 @@ function renderOptions() {
     host.options[game.id] = { ...(host.options[game.id] || {}), [id]: v };
     localStorage.setItem('tg-options', JSON.stringify(host.options));
     sendToGuests(lobbyMessage);
+    saveTable();
     updateLobby();
   };
   box.replaceChildren(...(game.options || []).map((o) => {
@@ -818,6 +1040,7 @@ async function selectGame(id) {
   }
   host.gameLoading = null;
   sendToGuests(lobbyMessage);
+  saveTable();
   renderGamePicker();
   renderOptions();
   updateLobby();
@@ -880,7 +1103,7 @@ function showLobby() {
   const host = app.host;
   host.onTable = false;
   screen(
-    h('button', { class: 'back', onclick: () => { if (confirm('Leave and end this game for everyone?')) endHosting(); } }, '‹ End'),
+    h('button', { class: 'back', onclick: showLeaveChoice }, '‹ Leave'),
     h('h2', {}, 'Your table'),
     gameBanner(),
     h('p', { class: 'net-line' }, h('span', {}, `Connection: ${NET_INFO[host.net].title}`),
@@ -1019,6 +1242,10 @@ function onPlayerMessage(entry, msg) {
     hostChat(entry.player.name, msg.text);
     return;
   }
+  if (msg.t === 'hello' && host.endingOnly) {
+    entry.conn.send({ t: 'tableEnded' });
+    return;
+  }
   if (msg.t === 'hello' && !entry.name) {
     clearTimeout(entry.timer);
     const pid = typeof msg.pid === 'string' ? msg.pid.slice(0, 40) : null;
@@ -1107,6 +1334,7 @@ function updateLobby() {
         onclick: () => {
           host.players = host.players.filter((x) => x !== p);
           sendToGuests(lobbyMessage);
+          saveTable();
           updateLobby();
         },
       }, 'Remove') : null)));
@@ -1254,6 +1482,7 @@ function admit(entry) {
     sendToGuests(lobbyMessage);
   }
   toast(`${entry.name} joined`);
+  saveTable();
   updateLobby();
 }
 
@@ -1290,6 +1519,7 @@ function startGame(gameId) {
   host.playing = id;
   host.state = game.setup(host.players.map((p) => p.name), optionsFor(game));
   host.onTable = true;
+  saveTable();
   sendAllViews();
 }
 
@@ -1299,6 +1529,7 @@ function endGame() {
   host.state = null;
   host.playing = null;
   sendToGuests(lobbyMessage);
+  saveTable();
   showLobby();
 }
 
@@ -1326,6 +1557,7 @@ function hostMove(seat, move) {
     else host.players[seat].conn?.send({ t: 'error', text: err });
     return;
   }
+  saveTable();
   sendAllViews();
 }
 
@@ -1353,17 +1585,29 @@ function renderHostTable() {
   game.render(view, table, (move) => hostMove(0, move));
 }
 
-function endHosting(quiet) {
+function endHosting(quiet, { keepSave = false } = {}) {
   const host = app.host;
-  host?.players.forEach((p) => p.conn?.close());
-  host?.joining.forEach((e) => e.close && e.close());
-  host?.invites.forEach((inv) => inv.pc.close());
-  host?.online?.close();
-  if (host) host.ending = true;
-  host?.ws?.close();
+  if (host && !keepSave) {
+    try { sendToGuests(() => ({ t: 'tableEnded' })); } catch { /* connections already closed */ }
+    clearSavedTable();
+  }
+  if (host) {
+    host.ending = true;
+    // Close a moment later, so the last message reaches every phone first.
+    setTimeout(() => {
+      host.players.forEach((p) => p.conn?.close());
+      host.joining.forEach((e) => e.close && e.close());
+      host.invites.forEach((inv) => inv.pc.close());
+      host.online?.close();
+      host.ws?.close();
+    }, 400);
+  }
   app.host = null;
   resetChat();
-  if (app.pendingReload) return location.reload(); // the host app downloaded newer games
+  if (app.pendingReload) return setTimeout(() => location.reload(), 500); // the host app downloaded newer games
+  const next = app.afterEnding;
+  app.afterEnding = null;
+  if (next) return next();
   if (!quiet) showHome();
 }
 
@@ -1418,42 +1662,50 @@ function joinWithCode(code) {
 
 // One-scan join: connect through the introduction service, then wait to be let in.
 function joinOnline(hostId, net) {
+  // Coming back to a table this phone already has a seat at: go straight in.
+  const seat = savedSeat();
+  if (app.name && seat && seat.hostId === hostId) return connectOnline(hostId, net || seat.net, true);
   screen(
     h('h2', {}, 'Join a game'),
     h('p', { class: 'note' }, net === 'online'
       ? 'You can join from anywhere with internet.'
       : 'Make sure you’re on the host’s Wi‑Fi or hotspot first.'),
     nameField(),
-    h('button', {
-      class: 'primary big',
-      onclick: async () => {
-        if (needName()) return;
-        screen(h('h2', {}, 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
-        const g = { conn: null, gameId: null, players: [], view: null, admitted: false };
-        app.guest = g;
-        resetChat();
-        g.reconnect = async () => {
-          const holder = {};
-          holder.conn = await joinOnlineTable(hostId, app.name, onHostMessage, () => connectionLost(g, holder.conn));
-          return holder.conn;
-        };
-        try {
-          g.conn = await g.reconnect();
-        } catch (err) {
-          if (app.guest === g) app.guest = null;
-          const gone = err && err.type === 'peer-unavailable';
-          const relay = await relayAvailable();
-          return guestFailed(gone
-            ? 'That table isn’t open anymore. Ask the host for their current game code.'
-            : relay
-              ? 'Couldn’t reach the host. Check your internet connection, then scan the host’s game code again.'
-              : 'Couldn’t reach the host. This Wi‑Fi may block phones from linking directly. Ask the host to turn on the relay (see the README), or try the host’s hotspot instead.');
-        }
-        connectedToHost(g);
-        screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, 'Waiting for the host to let you in…'));
-      },
-    }, 'Join'),
+    h('button', { class: 'primary big', onclick: () => { if (!needName()) connectOnline(hostId, net, false); } }, 'Join'),
   );
+}
+
+async function connectOnline(hostId, net, returning) {
+  screen(h('h2', {}, returning ? 'Returning to your table…' : 'Joining…'), h('p', { class: 'status mine' }, 'Connecting to the host…'));
+  const g = { conn: null, gameId: null, players: [], view: null, admitted: false, seat: { hostId, net: net || 'online' } };
+  app.guest = g;
+  resetChat();
+  g.reconnect = async () => {
+    const holder = {};
+    holder.conn = await joinOnlineTable(hostId, app.name, onHostMessage, () => connectionLost(g, holder.conn));
+    return holder.conn;
+  };
+  try {
+    g.conn = await g.reconnect();
+  } catch (err) {
+    if (app.guest !== g) return;
+    const gone = err && err.type === 'peer-unavailable';
+    // The host has paused this table: wait in the seat for them to come back.
+    if (gone && savedSeat()?.hostId === hostId) {
+      g.hostAway = true;
+      g.host = savedSeat().host;
+      return startReconnecting(g);
+    }
+    app.guest = null;
+    const relay = await relayAvailable();
+    return guestFailed(gone
+      ? 'That table isn’t open right now. If the host paused it, try again when they’re back, or ask them for their current game code.'
+      : relay
+        ? 'Couldn’t reach the host. Check your internet connection, then scan the host’s game code again.'
+        : 'Couldn’t reach the host. This Wi‑Fi may block phones from linking directly. Ask the host to turn on the relay (see the README), or try the host’s hotspot instead.');
+  }
+  connectedToHost(g);
+  screen(h('h2', {}, 'Connected'), h('p', { class: 'status mine' }, returning ? 'Getting your seat back…' : 'Waiting for the host to let you in…'));
 }
 
 // ---------- staying connected (all games) ----------
@@ -1488,36 +1740,78 @@ function connectionLost(g, conn) {
   else onHostLost();
 }
 
-function startReconnecting(g) {
-  if (g.reconnecting || app.guest !== g) return;
-  g.reconnecting = true;
-  const began = Date.now();
+function renderWaiting(g) {
+  if (app.guest !== g || !g.reconnecting) return;
+  const who = g.host || 'the host';
+  const away = g.hostAway || Date.now() - g.waitingSince > 30000;
+  // Only redraw when the message changes (this runs on every retry).
+  if (g.waitKey === String(away) && document.getElementById('waiting')) return;
+  g.waitKey = String(away);
   screen(
-    h('h2', {}, 'Reconnecting…'),
-    h('p', { class: 'status mine' }, 'Lost the connection to the host (maybe your screen turned off). Getting you back into your seat…'),
-    h('p', { class: 'note' }, 'Stay on the host’s Wi‑Fi or hotspot.'),
-    h('button', { class: 'quiet', onclick: () => { g.reconnecting = false; clearInterval(g.heartbeat); app.guest = null; showHome(); } }, 'Leave the game'),
+    h('span', { id: 'waiting', hidden: true }),
+    h('h2', {}, away ? 'Game paused' : 'Reconnecting…'),
+    h('p', { class: 'status mine' }, away
+      ? `Waiting for ${who} to come back. You’ll be back in your seat automatically.`
+      : 'Lost the connection to the host (maybe your screen turned off). Getting you back into your seat…'),
+    h('p', { class: 'note' }, away
+      ? 'You can leave this screen. Open Table Games later and tap Return to table, or open the same game link again.'
+      : 'Stay on the host’s Wi‑Fi or hotspot.'),
+    h('button', { class: 'quiet', onclick: () => leaveForNow(g) }, 'Leave for now'),
   );
+}
+
+// Step away from a paused table; the seat stays saved so the player can return.
+function leaveForNow(g) {
+  g.reconnecting = false;
+  clearTimeout(g.retry);
+  clearInterval(g.heartbeat);
+  try { g.conn?.close(); } catch { /* already closed */ }
+  app.guest = null;
+  showHome();
+}
+
+function startReconnecting(g) {
+  if (app.guest !== g) return;
+  if (g.reconnecting) return renderWaiting(g);
+  g.reconnecting = true;
+  g.waitingSince = Date.now();
+  renderWaiting(g);
   const attempt = async () => {
     if (app.guest !== g || !g.reconnecting) return;
     try {
       const conn = await g.reconnect();
-      if (app.guest !== g) { conn.close(); return; }
+      if (app.guest !== g || !g.reconnecting) { conn.close(); return; }
       g.conn = conn;
       g.reconnecting = false;
+      g.hostAway = false;
       connectedToHost(g); // the host recognises this phone and sends the game back
-    } catch {
-      if (Date.now() - began > 5 * 60 * 1000) {
-        g.reconnecting = false;
-        clearInterval(g.heartbeat);
-        app.guest = null;
-        return guestFailed('Couldn’t get back to the host. Make sure you’re on their Wi‑Fi, then scan their game code again to return to your seat.');
-      }
-      g.retry = setTimeout(attempt, 3000);
+    } catch (err) {
+      if (app.guest !== g || !g.reconnecting) return;
+      if (err && err.type === 'peer-unavailable') g.hostAway = true;
+      renderWaiting(g);
+      // Try often at first, then settle into a slower, battery-friendly pace.
+      const waited = Date.now() - g.waitingSince;
+      g.retry = setTimeout(attempt, waited < 60000 ? 3000 : waited < 600000 ? 8000 : 20000);
     }
   };
   g.retryNow = () => { clearTimeout(g.retry); attempt(); };
   attempt();
+}
+
+function tableEnded() {
+  const g = app.guest;
+  if (g) {
+    g.reconnecting = false;
+    clearTimeout(g.retry);
+    clearInterval(g.heartbeat);
+  }
+  clearSeat();
+  app.guest = null;
+  screen(
+    h('h2', {}, 'The table has ended'),
+    h('p', {}, `${g?.host || 'The host'} ended this table. Thanks for playing!`),
+    h('button', { class: 'primary big', onclick: showHome }, 'Home'),
+  );
 }
 
 function onHostLost() {
@@ -1526,7 +1820,7 @@ function onHostLost() {
   app.guest = null;
   screen(
     h('h2', {}, 'Disconnected from the host'),
-    h('p', {}, 'Scan the host’s game code again. You’ll go straight back to your seat.'),
+    h('p', {}, 'Scan the host’s game code again. You’ll go straight back to your seat. If the host paused the table, do this when they’re back.'),
     h('button', { class: 'primary big', onclick: showJoinScan }, 'Rejoin'),
     h('button', { class: 'quiet', onclick: showHome }, 'Home'),
   );
@@ -1637,11 +1931,19 @@ function onHostMessage(msg) {
     return;
   }
   if (msg.t === 'chatClear') { chatState.msgs = []; renderChat(); return; }
+  if (msg.t === 'tableEnded') return tableEnded();
+  if (msg.t === 'hostPaused') {
+    g.hostAway = true;
+    if (g.reconnecting) renderWaiting(g);
+    return;
+  }
   if (msg.t === 'admitted') {
     g.admitted = true;
     g.host = msg.host;
+    saveSeat(g);
     showGuestLobby();
   } else if (msg.t === 'declined') {
+    clearSeat();
     app.guest = null;
     screen(
       h('h2', {}, 'Not let in'),

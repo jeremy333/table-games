@@ -263,13 +263,20 @@ function wrapRelay(dc, onMessage, onClose) {
   };
 }
 
+// A new table's id. The id is the table's link, so it stays the same for the
+// whole table, including after the host closes the app and comes back.
+export function newTableId() {
+  return 'tablegames-' + randomId();
+}
+
 // Host: open the table. Calls onPlayer({ name, attach }) for each phone that joins;
-// call attach(onMessage, onClose) to get a connection. Rejects with no internet.
-export async function openOnlineTable(onPlayer, timeoutMs = 8000) {
+// call attach(onMessage, onClose) to get a connection. Rejects with no internet,
+// or with err.type 'unavailable-id' while the table's old connection is still closing.
+export async function openOnlineTable(onPlayer, timeoutMs = 8000, tableId = null) {
   await loadTurn();
   return new Promise((resolve, reject) => {
     if (!window.Peer) return reject(new Error('unavailable'));
-    const id = 'tablegames-' + randomId();
+    const id = tableId || newTableId();
     const peer = new window.Peer(id, relayOptions());
     let opened = false;
     const timer = setTimeout(() => {

@@ -41,6 +41,15 @@ Pick a game in the lobby by searching its name, a tag (like "cards" or "partners
 
 Want to add one? It's one game file plus one line in `games/catalog.js`. See [ADDING-A-GAME.md](ADDING-A-GAME.md).
 
+## If the host leaves
+
+The host's phone saves the table after every move, so the game pauses instead of ending.
+
+- **Host closes the app by accident (or on purpose with Leave, then Pause and leave):** everyone keeps their seat and sees "Game paused." Their phones reconnect on their own when the host is back.
+- **Host comes back:** open Table Games and tap **Resume** on the home screen. The table keeps the same link and game code, and everyone's cards are where they were.
+- **Players can leave too:** tap **Leave for now**, then later open Table Games and tap **Return to table**, or open the same game link again.
+- **Ending it:** the host taps **End it** (on the home screen) or **End the table for everyone** (under Leave). Every phone is told the table is over.
+
 ## Offline
 
 On the home screen, **Games & offline downloads** lets anyone search the games and download them (or **Download all**) before going somewhere with no internet. Games you open are saved automatically too. If a player's phone is missing the game the host picks, the host's phone sends it over, even offline.
