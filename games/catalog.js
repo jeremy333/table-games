@@ -139,4 +139,22 @@ export const CATALOG = [
     blurb: 'Trap and flip your opponent’s discs. Most discs at the end wins.',
     tags: ['board', 'strategy', 'classic', 'two-player', 'othello'],
   },
+  {
+    id: 'mergehotels',
+    file: 'mergehotels.js',
+    name: 'MergeHotels',
+    min: 2,
+    max: 6,
+    blurb: 'Build hotel chains, buy shares, and merge for big bonuses. Richest player wins.',
+    tags: ['board', 'strategy', 'tiles', 'stocks', 'shares', 'money', 'business', 'hotels', 'mergers', 'classic', 'acquire', 'family'],
+  },
+  {
+    id: 'tic-tac-toe',
+    file: 'tic-tac-toe.js',
+    name: 'Tic Tac Toe',
+    min: 2,
+    max: 2,
+    blurb: 'Three in a row wins. Quick to learn, quick to play.',
+    tags: ['board', 'classic', 'quick', 'easy', 'kids', 'two-player', 'noughts and crosses', 'x and o'],
+  },
 ];
