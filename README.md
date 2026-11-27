@@ -39,7 +39,7 @@ Everyone opens the link once while they have internet. The page saves itself to 
 
 Pick a game in the lobby by searching its name, a tag (like "cards" or "partners"), or a player count (like "4"). Bird’s Nest settings are chosen in the lobby: set partners or pick partner (the bidder calls a card), the Bird card's rank (high, 10½, or low), whether the last trick is worth 20, the moon's value, and the play-to score.
 
-Want to add one? It's one game file plus one line in `games/catalog.js`. See [ADDING-A-GAME.md](ADDING-A-GAME.md).
+Want to add one? Upload its file to the `games` folder. GitHub updates the game list by itself. See [ADDING-A-GAME.md](ADDING-A-GAME.md).
 
 ## If the host leaves
 
@@ -62,7 +62,7 @@ On the home screen, **Games & offline downloads** lets anyone search the games a
 - `js/cards.js` — shared deck, shuffle, and card drawing for any game.
 - `js/app.js` — screens, lobby, and passing moves between phones.
 - `js/library.js` — game search, loading a game only when it's picked, and offline downloads.
-- `games/catalog.js` — the list of games (one entry each).
+- `games/catalog.js` — the list of games, rebuilt automatically from the game files (`.github/build-catalog.mjs`).
 - `games/` — one file per game, including its own styles. `template.js` is a starting point for new games.
 - `sw.js` — saves the app on the phone for offline use. Games are saved separately, so adding one never touches this file.
 
