@@ -1,8 +1,12 @@
-// template.js — a starting point for a new game. Copy this file, rename it,
-// fill in the four functions, and add one entry to games/catalog.js.
-// (This file itself isn't in the catalog, so it never shows up in the app.)
+// template.js — a starting point for a new game. Copy this file, rename it
+// (the file name becomes the game's id), fill in the name and the four
+// functions, and upload it to games/. The game list updates by itself.
+// (This file itself is skipped, so it never shows up in the app.)
 
 export default {
+  name: 'Your Game',
+  blurb: 'One line shown under the name in the game list.',
+  tags: ['cards'], // extra search words
   minPlayers: 2,
   maxPlayers: 4,
   rules: 'One or two sentences shown in the lobby.',
