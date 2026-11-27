@@ -1,5 +1,6 @@
-# Builds the Table Games Host Android app whenever the site changes,
-# and posts the installable file under Releases → "Table Games Host app".
+# Every time the site changes: rebuilds the game list from the files in games/,
+# then builds the Table Games Host Android app and posts it under
+# Releases → "Table Games Host app".
 name: Build host app
 
 on:
@@ -19,6 +20,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Adding a game is just uploading its file to games/: this rebuilds the
+      # game list (games/catalog.js) from the game files and saves it.
+      - name: Update the game list
+        run: |
+          node .github/build-catalog.mjs
+          if ! git diff --quiet -- games/catalog.js; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add games/catalog.js
+            git commit -m "Update the game list"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
 
       - uses: actions/setup-java@v4
         with:
