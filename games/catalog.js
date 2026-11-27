@@ -1,13 +1,7 @@
-// The game catalog. Adding a game = put its file in games/ and add one entry here.
-// Nothing else in the app needs to change.
-//
-//   id       unique, no spaces (must match the game file's id)
-//   file     the game's file in this folder
-//   name     shown in the game list
-//   min/max  player counts (used for search, e.g. "4" finds 4-player games)
-//   blurb    one line shown under the name
-//   tags     extra search words
-//   assets   (optional) other files the game needs, e.g. images, so they download too
+// The game list. MADE AUTOMATICALLY from the files in games/ — don’t edit it.
+// To add a game, upload its file to games/. To change a game's name, blurb or
+// search words, change them in that game's file (see ADDING-A-GAME.md).
+// GitHub rebuilds this list every time you upload (.github/build-catalog.mjs).
 
 export const CATALOG = [
   {
@@ -38,62 +32,110 @@ export const CATALOG = [
     tags: ['deck-building', 'dominion', 'strategy', 'cards', 'kingdom'],
   },
   {
-    id: 'hearts', file: 'hearts.js', name: 'Hearts', min: 4, max: 4,
+    id: 'hearts',
+    file: 'hearts.js',
+    name: 'Hearts',
+    min: 4,
+    max: 4,
     blurb: 'Dodge hearts and the Queen of Spades, or take them all and shoot the moon.',
     tags: ['cards', 'trick-taking', 'passing', 'classic'],
   },
   {
-    id: 'pinochle', file: 'pinochle.js', name: 'Pinochle', min: 4, max: 4,
+    id: 'pinochle',
+    file: 'pinochle.js',
+    name: 'Pinochle',
+    min: 4,
+    max: 4,
     blurb: 'Partnership bidding, meld, and tricks with the 48-card deck.',
     tags: ['cards', 'trick-taking', 'bidding', 'partners', 'meld', 'teams'],
   },
   {
-    id: 'go-fish', file: 'go-fish.js', name: 'Go Fish', min: 2, max: 6,
+    id: 'go-fish',
+    file: 'go-fish.js',
+    name: 'Go Fish',
+    min: 2,
+    max: 6,
     blurb: 'Ask for cards, go fish, and collect books of four.',
     tags: ['cards', 'family', 'kids', 'easy'],
   },
   {
-    id: 'checkers', file: 'checkers.js', name: 'Checkers', min: 2, max: 2,
+    id: 'checkers',
+    file: 'checkers.js',
+    name: 'Checkers',
+    min: 2,
+    max: 2,
     blurb: 'Jump, double-jump, and crown your kings.',
     tags: ['board', 'strategy', 'classic', 'two-player', 'draughts'],
   },
   {
-    id: 'chess', file: 'chess.js', name: 'Chess', min: 2, max: 2,
+    id: 'chess',
+    file: 'chess.js',
+    name: 'Chess',
+    min: 2,
+    max: 2,
     blurb: 'The full game: castling, en passant, promotion, and checkmate.',
     tags: ['board', 'strategy', 'classic', 'two-player'],
   },
   {
-    id: 'mexican-train', file: 'mexican-train.js', name: 'Mexican Train', min: 2, max: 8,
+    id: 'mexican-train',
+    file: 'mexican-train.js',
+    name: 'Mexican Train',
+    min: 2,
+    max: 8,
     blurb: 'Dominoes for a crowd: build trains from the engine, cover doubles, go out first.',
     tags: ['dominoes', 'tiles', 'family', 'group'],
   },
   {
-    id: 'farkle', file: 'farkle.js', name: 'Farkle', min: 2, max: 8,
+    id: 'farkle',
+    file: 'farkle.js',
+    name: 'Farkle',
+    min: 2,
+    max: 8,
     blurb: 'Roll six dice, bank points or push your luck — don’t Farkle!',
     tags: ['dice', 'party', 'luck', 'group'],
   },
   {
-    id: 'yacht', file: 'yacht.js', name: 'Yacht', min: 1, max: 8,
+    id: 'yacht',
+    file: 'yacht.js',
+    name: 'Yacht',
+    min: 1,
+    max: 8,
     blurb: 'Five dice, three rolls, thirteen boxes to fill. Roll a Yacht for 50!',
     tags: ['dice', 'family', 'scorecard', 'yahtzee'],
   },
   {
-    id: 'four-in-a-row', file: 'four-in-a-row.js', name: 'Four in a Row', min: 2, max: 2,
+    id: 'four-in-a-row',
+    file: 'four-in-a-row.js',
+    name: 'Four in a Row',
+    min: 2,
+    max: 2,
     blurb: 'Drop discs and line up four before your opponent does.',
     tags: ['board', 'two-player', 'quick', 'connect four', 'family'],
   },
   {
-    id: 'mancala', file: 'mancala.js', name: 'Mancala', min: 2, max: 2,
+    id: 'mancala',
+    file: 'mancala.js',
+    name: 'Mancala',
+    min: 2,
+    max: 2,
     blurb: 'Sow seeds around the board, capture, and fill your store.',
     tags: ['board', 'two-player', 'strategy', 'kalah', 'classic'],
   },
   {
-    id: 'challenge', file: 'challenge.js', name: 'Challenge', min: 2, max: 12,
+    id: 'challenge',
+    file: 'challenge.js',
+    name: 'Challenge',
+    min: 2,
+    max: 12,
     blurb: 'Play cards to claim spaces and make rows of five with your team.',
     tags: ['cards', 'board', 'teams', 'partners', 'sequence', 'group'],
   },
   {
-    id: 'reversi', file: 'reversi.js', name: 'Reversi', min: 2, max: 2,
+    id: 'reversi',
+    file: 'reversi.js',
+    name: 'Reversi',
+    min: 2,
+    max: 2,
     blurb: 'Trap and flip your opponent’s discs. Most discs at the end wins.',
     tags: ['board', 'strategy', 'classic', 'two-player', 'othello'],
   },
