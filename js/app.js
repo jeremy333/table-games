@@ -992,6 +992,64 @@ function renderOptions() {
     return h('label', { class: 'field option' }, h('span', {}, o.label), input);
   }));
   box.hidden = !(game.options || []).length;
+  renderPartners();
+}
+
+// ---------- partners (team games) ----------
+// A game with `teams` seats partners across the table: seats 1 & 3 vs 2 & 4.
+// The host stays in seat 1, so choosing the host's partner sets both teams.
+
+function teamGame() {
+  const host = app.host;
+  const game = host && getGame(host.gameId);
+  if (!game || !game.teams || host.players.length !== 4) return false;
+  return typeof game.teams === 'function' ? !!game.teams(optionsFor(game)) : true;
+}
+
+function teamsText() {
+  if (!teamGame()) return null;
+  const n = app.host.players.map((p) => p.name);
+  return `Teams: ${n[0]} & ${n[2]} vs ${n[1]} & ${n[3]}`;
+}
+
+function setPartner(player) {
+  const host = app.host;
+  if (host.state) return toast('Change partners after this game ends.');
+  const others = host.players.slice(1).filter((p) => p !== player);
+  host.players = [host.players[0], others[0], player, others[1]];
+  sendToGuests(lobbyMessage);
+  saveTable();
+  updateLobby();
+}
+
+function renderPartners() {
+  const host = app.host;
+  const box = document.getElementById('partners');
+  if (!host || !box) return;
+  const on = teamGame();
+  const key = on ? `${host.players.map((p) => p.pid || p.name).join('|')}|${!!host.state}` : 'off';
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.hidden = !on;
+  if (!on) return box.replaceChildren();
+  const [me, left, partner, right] = host.players;
+  const pick = h('select', {
+    'aria-label': 'Your partner',
+    disabled: !!host.state,
+    onchange: (e) => setPartner(host.players[Number(e.target.value)]),
+  }, host.players.slice(1).map((p, i) => h('option', { value: i + 1, selected: p === partner }, p.name)));
+  box.replaceChildren(
+    h('h3', { class: 'section' }, 'Partners'),
+    h('label', { class: 'field option' }, h('span', {}, 'Your partner'), pick),
+    h('div', { class: 'team-pair' },
+      h('div', { class: 'team' }, h('strong', {}, `${me.name} & ${partner.name}`)),
+      h('span', { class: 'vs' }, 'vs'),
+      h('div', { class: 'team' }, h('strong', {}, `${left.name} & ${right.name}`))),
+    h('p', { class: 'note' }, host.state
+      ? 'Change partners after this game ends.'
+      : 'Partners sit across from each other. Turns go around the table in this order: '
+        + `${me.name}, ${left.name}, ${partner.name}, ${right.name}.`),
+  );
 }
 
 function lobbyMessage() {
@@ -999,6 +1057,7 @@ function lobbyMessage() {
   return {
     t: 'lobby', players: app.host.players.map((p) => p.name), gameId: app.host.gameId, rules: rulesText(game),
     inGame: !!app.host.state, // a game is still going: seated players stay at the table
+    teams: teamsText(),
   };
 }
 
@@ -1112,6 +1171,7 @@ function showLobby() {
     h('h3', { class: 'section' }, 'Game'),
     gamePicker(),
     h('div', { class: 'options', id: 'options' }),
+    h('section', { class: 'partners', id: 'partners', hidden: true }),
     h('p', { class: 'rules', id: 'rules' }),
     // The game code, with the waiting room and player list right below it.
     h('section', { class: 'add-box', id: 'add-box' }),
@@ -1322,6 +1382,7 @@ function updateLobby() {
   const game = getGame(host.gameId);
   // Only touch what changed, so a tap that's in progress (like Start) isn't lost.
   setText(document.getElementById('rules'), rulesText(game));
+  renderPartners();
 
   const playersKey = host.players.map((p) => `${p.name}:${!!p.conn}`).join('|');
   if (list.dataset.key !== playersKey) {
@@ -1953,6 +2014,7 @@ function onHostMessage(msg) {
   } else if (msg.t === 'lobby') {
     g.players = msg.players;
     g.rules = msg.rules;
+    g.teams = msg.teams || null;
     if (msg.inGame && g.view) return; // the host is just visiting the lobby; stay in the game
     g.gameId = msg.gameId;
     g.view = null;
@@ -1978,6 +2040,7 @@ function showGuestLobby() {
     h('h2', {}, 'You’re in'),
     entry ? h('p', { class: 'rules' }, h('strong', {}, entry.name + '. '), g.rules || '') : null,
     entry && !ready ? h('p', { class: 'note' }, 'Getting the game ready on your phone…') : null,
+    g.teams ? h('p', { class: 'teams-line' }, g.teams) : null,
     g.players.length ? h('ol', { class: 'players' }, g.players.map((n) => h('li', {}, n))) : null,
     h('p', { class: 'status' }, `Waiting for ${g.host || 'the host'} to start…`),
   );
