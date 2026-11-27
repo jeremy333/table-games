@@ -420,11 +420,14 @@ button.rook-card:disabled { filter: none; opacity: 1; }
 
 `,
   options: OPTIONS,
+  // Set partners sit across the table (seats 1 & 3 vs 2 & 4), so the lobby
+  // lets the host choose partners. Pick partner needs no setup.
+  teams: (raw) => cleanOptions(raw).partners === 'set',
 
   rules(raw) {
     const o = cleanOptions(raw);
     const partners = o.partners === 'set'
-      ? 'Partners sit across: players 1 & 3 vs 2 & 4, in lobby order. The high bidder takes the nest, discards 5, and names trump.'
+      ? 'Set partners, chosen by the host in the lobby. The high bidder takes the nest, discards 5, and names trump.'
       : 'Pick partner: the high bidder takes the nest, discards 5, names trump, and calls a card. Whoever holds it is their secret partner. Scores are kept per player.';
     return `${partners} Bid from ${MIN_BID} by ${BID_STEP}s, or bid the moon (300, 400, 500, or 1000; swap up to 2 cards with your partner; partner plays or sits out; take every trick or every point). ` +
       `The Bird is ${ROOK_RANK_TEXT[o.rook]}. Counters: 5s = 5, 10s and 14s = 10, 1s = 15, Bird = 20` +

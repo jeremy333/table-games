@@ -166,6 +166,7 @@ function endHand(s, lastWinner) {
 export default {
   minPlayers: 4,
   maxPlayers: 4,
+  teams: true, // partners sit across the table; the host chooses them in the lobby
   options: [
     { id: 'minBid', label: 'Minimum bid', type: 'select', default: '250', choices: [['150', '150'], ['200', '200'], ['250', '250']] },
     { id: 'pass', label: 'Cards partners exchange', type: 'select', default: '4', choices: [['4', '4 cards'], ['3', '3 cards'], ['0', 'No exchange']] },
@@ -173,7 +174,7 @@ export default {
   ],
   rules(o) {
     const pass = Number(o?.pass ?? 4);
-    return `Partners sit across: players 1 & 3 vs 2 & 4, in lobby order. Bid from ${o?.minBid || 250} by 10s; the high bidder names trump. ` +
+    return `Two teams of partners, chosen by the host in the lobby. Bid from ${o?.minBid || 250} by 10s; the high bidder names trump. ` +
       (pass ? `Their partner passes them ${pass} cards, and they pass ${pass} back. ` : '') +
       'Meld is counted for you. In play, follow suit and beat the trick if you can; if you can’t follow, trump if you can. ' +
       `Aces, 10s and Kings are worth 10 and the last trick 10. A team must take a trick to keep its meld. Play to ${o?.playTo || 1500}.`;
