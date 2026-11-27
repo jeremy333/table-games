@@ -119,24 +119,27 @@ function bankLeft(s, c) {
 function payBonuses(s, c, size) {
   const price = priceOf(c, size);
   const holders = s.players.map((p, seat) => ({ seat, n: p.shares[c] })).filter((h) => h.n > 0).sort((a, b) => b.n - a.n);
-  if (!holders.length) { say(s, `No one holds ${CHAINS[c].name}: no bonuses`); ev(s, 'No one held ', { c }, ': no bonuses'); return; }
+  const paid = [];
+  if (!holders.length) { say(s, `No one holds ${CHAINS[c].name}: no bonuses`); ev(s, 'No one held ', { c }, ': no bonuses'); return paid; }
   const major = price * 10;
   const minor = price * 5;
   const pay = (seats, amount, what, kind) => {
     const each = roundUp(amount / seats.length);
     seats.forEach((seat) => { s.players[seat].cash += each; });
+    paid.push({ seats, kind, each });
     ev(s, `${seats.map((x) => s.names[x]).join(' & ')} ${seats.length > 1 ? 'split' : 'got'} the `, { c }, ` ${kind} bonus (${money(each)}${seats.length > 1 ? ' each' : ''})`);
     say(s, `${seats.map((x) => s.names[x]).join(' & ')} ${seats.length > 1 ? 'split' : 'gets'} the ${what} bonus: ${money(each)}${seats.length > 1 ? ' each' : ''}`);
   };
   const top = holders.filter((h) => h.n === holders[0].n).map((h) => h.seat);
   if (top.length > 1 || holders.length === 1) {
     pay(top, major + minor, `${CHAINS[c].name} majority and minority`, 'majority + minority');
-    return;
+    return paid;
   }
   pay(top, major, `${CHAINS[c].name} majority`, 'majority');
   const rest = holders.filter((h) => h.n < holders[0].n);
   const second = rest.filter((h) => h.n === rest[0].n).map((h) => h.seat);
   pay(second, minor, `${CHAINS[c].name} minority`, 'minority');
+  return paid;
 }
 
 function canEnd(s) {
@@ -203,9 +206,25 @@ function nextTurn(s) {
 function startBuy(s) {
   s.phase = 'buy';
   s.pending = null;
+  // Nothing they can buy (not enough cash, or no shares left): skip the buy step.
+  // Kept when the game can end, so they still get the chance to end it.
+  const p = s.players[s.turn];
+  const sz = sizes(s.board);
+  const affordable = CHAINS.some((_, c) => sz[c] > 0 && bankLeft(s, c) > 0 && priceOf(c, sz[c]) <= p.cash);
+  if (!affordable && !canEnd(s)) {
+    const anyForSale = CHAINS.some((_, c) => sz[c] > 0 && bankLeft(s, c) > 0);
+    const why = anyForSale ? 'Not enough cash to buy — buy step skipped' : 'No shares to buy — buy step skipped';
+    say(s, `${s.names[s.turn]}: ${why.toLowerCase()}`);
+    ev(s, why);
+    nextTurn(s);
+  }
 }
 
-// Begin handling the next defunct chain in a merger (or wrap the merger up).
+// Mergers, one company coming off at a time (biggest first):
+//  1. bonuses are paid to its top two shareholders, and everyone sees who got what;
+//  2. each shareholder, starting with the merging player, sells, trades or keeps;
+//  3. everyone sees the full list of choices and taps OK;
+// then the merging player finishes their turn by buying.
 function nextDefunct(s) {
   const m = s.pending;
   if (m.idx >= m.defunct.length) {
@@ -216,7 +235,9 @@ function nextDefunct(s) {
   const c = m.defunct[m.idx];
   say(s, `${CHAINS[c].name} (${m.sizes[c]} tiles) merges into ${CHAINS[m.survivor].name}`);
   ev(s, 'Merger: ', { c }, ` (${m.sizes[c]}) into `, { c: m.survivor });
-  payBonuses(s, c, m.sizes[c]);
+  m.bonuses = payBonuses(s, c, m.sizes[c]);
+  m.choices = [];
+  m.acks = [];
   const n = s.names.length;
   m.deciders = [];
   for (let k = 0; k < n; k++) {
@@ -224,6 +245,7 @@ function nextDefunct(s) {
     if (s.players[seat].shares[c] > 0) m.deciders.push(seat);
   }
   m.di = 0;
+  // No one held shares: nothing to decide or confirm.
   if (!m.deciders.length) { m.idx++; return nextDefunct(s); }
   s.phase = 'dispose';
 }
@@ -231,7 +253,16 @@ function nextDefunct(s) {
 function beginMerger(s, tile, survivor, chains) {
   const sz = sizes(s.board);
   const defunct = chains.filter((c) => c !== survivor).sort((a, b) => sz[b] - sz[a]);
-  s.pending = { tile, survivor, defunct, sizes: Object.fromEntries(chains.map((c) => [c, sz[c]])), idx: 0, deciders: [], di: 0 };
+  s.pending = {
+    tile, survivor, defunct, sizes: Object.fromEntries(chains.map((c) => [c, sz[c]])),
+    idx: 0, deciders: [], di: 0, bonuses: [], choices: [], acks: [],
+  };
+  nextDefunct(s);
+}
+
+function reviewDone(s) {
+  const m = s.pending;
+  m.idx++;
   nextDefunct(s);
 }
 
@@ -252,7 +283,8 @@ const game = {
   rules(o) {
     const open = cleanOptions(o).open === 'open';
     return 'Each turn: place a tile, buy up to 3 shares, and draw back to 6. A tile beside a lone tile founds a hotel chain, and you get a free share. ' +
-      'A tile joining chains merges them: the biggest survives, the top two shareholders of each smaller chain get bonuses, then its shareholders sell, trade 2 for 1, or keep. ' +
+      'A tile joining chains merges them: the bigger chain stays (on a tie, the merging player picks) and the smaller comes off. Its top two shareholders get bonuses, ' +
+      'then each shareholder, starting with the merging player, sells, trades 2 for 1, or keeps. Everyone sees the choices and taps OK, then the merging player buys. ' +
       `Chains of ${SAFE}+ tiles are safe. When a chain reaches ${END_SIZE} or every chain is safe, the player on turn may end the game. Final bonuses are paid, shares are sold, and the most money wins. ` +
       (open ? 'Everyone’s cash and shares are shown.' : 'Cash and shares are private.');
   },
@@ -290,21 +322,26 @@ const game = {
     let ask = null;
     if (s.phase === 'found' && m) ask = { type: 'found', free: m.free };
     if (s.phase === 'survivor' && m) ask = { type: 'survivor', tied: m.tied };
-    if (s.phase === 'dispose' && m) {
+    let merger = null;
+    if ((s.phase === 'dispose' || s.phase === 'review') && m) {
       const c = m.defunct[m.idx];
-      const who = m.deciders[m.di];
-      ask = {
-        type: 'dispose', chain: c, survivor: m.survivor, who,
-        held: who === seat ? me.shares[c] : null,
-        survivorBank: bankLeft(s, m.survivor), price: priceOf(c, m.sizes[c]),
+      merger = {
+        chain: c, survivor: m.survivor, size: m.sizes[c], price: priceOf(c, m.sizes[c]),
+        merger: s.turn, bonuses: m.bonuses, choices: m.choices,
+        deciders: m.deciders, who: s.phase === 'dispose' ? m.deciders[m.di] : null,
+        acks: m.acks, more: m.defunct.length - m.idx - 1,
       };
+      if (s.phase === 'dispose' && merger.who === seat) {
+        ask = { type: 'dispose', chain: c, survivor: m.survivor, held: me.shares[c], survivorBank: bankLeft(s, m.survivor), price: merger.price };
+      }
+      if (s.phase === 'review' && me && !m.acks.includes(seat)) ask = { type: 'review' };
     }
     return {
       seat, names: s.names, board: s.board, turn: s.turn, phase: s.phase, last: s.last,
       hand: me ? s.hands[seat].slice().sort((a, b) => a - b).map((t) => ({ t, ...analyze(s.board, t) })) : null,
       me: me ? { cash: me.cash, shares: me.shares } : null,
       others: s.players.map((p, i) => ({ cash: open || i === seat ? p.cash : null, shares: open || i === seat ? p.shares : null, tiles: s.hands[i].length })),
-      chains, ask, bag: s.bag.length, canEnd: canEnd(s), open: s.opts.open === 'open',
+      chains, ask, merger, bag: s.bag.length, canEnd: canEnd(s), open: s.opts.open === 'open',
       winner: s.winners, final: s.final, log: s.log.slice(-4),
       rounds: (s.turns || []).filter((r) => r.events.length).map((r) => ({ seat: r.seat, events: r.events, now: s.phase !== 'over' && r === s.turns[s.turns.length - 1] })),
     };
@@ -318,6 +355,18 @@ const game = {
 
     if (s.phase === 'dispose') {
       const m = s.pending;
+      // The host can move things along if a shareholder is away: they keep their shares.
+      if (move.type === 'skipDecision' && seat === 0 && m.deciders[m.di] !== 0) {
+        const away = m.deciders[m.di];
+        const c = m.defunct[m.idx];
+        const held = s.players[away].shares[c];
+        m.choices.push({ seat: away, sell: 0, trade: 0, kept: held, cash: 0, skipped: true });
+        say(s, `The host skipped ${s.names[away]}, who keeps ${held} ${CHAINS[c].name}`);
+        ev(s, `${s.names[away]} kept ${held} (skipped by host) `, { c });
+        m.di++;
+        if (m.di >= m.deciders.length) s.phase = 'review';
+        return null;
+      }
       if (seat !== m.deciders[m.di]) return `Waiting for ${s.names[m.deciders[m.di]]} to decide.`;
       if (move.type !== 'dispose') return 'Choose what to do with your shares.';
       const c = m.defunct[m.idx];
@@ -332,11 +381,26 @@ const game = {
       p.cash += sell * price;
       p.shares[m.survivor] += trade / 2;
       const kept = held - sell - trade;
+      m.choices.push({ seat, sell, trade, kept, cash: sell * price });
       const parts = [sell ? `sold ${sell}` : null, trade ? `traded ${trade} for ${trade / 2} ${CHAINS[m.survivor].name}` : null, kept ? `kept ${kept}` : null].filter(Boolean);
       say(s, `${s.names[seat]} ${parts.join(', ')} (${CHAINS[c].name})`);
       ev(s, `${s.names[seat]} ${parts.join(', ')} `, { c });
       m.di++;
-      if (m.di >= m.deciders.length) { m.idx++; nextDefunct(s); }
+      if (m.di >= m.deciders.length) s.phase = 'review';
+      return null;
+    }
+
+    if (s.phase === 'review') {
+      const m = s.pending;
+      if (move.type === 'continue') {
+        if (seat !== 0) return 'Only the host can continue without waiting.';
+        say(s, 'The host continued without waiting');
+        reviewDone(s);
+        return null;
+      }
+      if (move.type !== 'ok') return 'Tap OK to continue.';
+      if (!m.acks.includes(seat)) m.acks.push(seat);
+      if (m.acks.length >= n) reviewDone(s);
       return null;
     }
 
@@ -467,13 +531,21 @@ const game = {
       e.style.color = ch.ink;
       return e;
     };
+    const line = (...parts) => {
+      const e = el('span', '');
+      parts.forEach((p) => e.append(typeof p === 'object' && p && 'c' in p ? chip(p.c) : p));
+      return e;
+    };
+    const who = (seat) => (seat === view.seat ? 'You' : view.names[seat]);
     const player = view.me != null;
     const myTurn = player && view.turn === view.seat && view.phase !== 'over';
     const ask = view.ask;
-    const ui = (root.__mh = root.__mh || { pick: null, buys: {} });
+    const mg = view.merger;
+    const ui = (root.__mh = root.__mh || { pick: null, buys: {}, dispose: null });
     const redraw = () => game.render(view, root, send);
     if (!myTurn || view.phase !== 'place') ui.pick = null;
     if (!myTurn || view.phase !== 'buy') ui.buys = {};
+    if (!ask || ask.type !== 'dispose') ui.dispose = null;
 
     // Players
     const head = el('div', 'mh-players');
@@ -489,15 +561,17 @@ const game = {
     let status;
     if (view.phase === 'over') {
       status = view.winner.length > 1 ? 'It’s a tie!' : view.winner[0] === view.seat ? 'You win!' : `${view.names[view.winner[0]]} wins`;
-    } else if (ask && ask.type === 'dispose') {
-      status = ask.who === view.seat ? `Merger! Decide what to do with your ${view.chains[ask.chain].name} shares`
-        : `Merger: ${view.names[ask.who]} is deciding about their ${view.chains[ask.chain].name} shares`;
+    } else if (mg && view.phase === 'dispose') {
+      status = mg.who === view.seat ? `Merger! What will you do with your ${view.chains[mg.chain].name} shares?`
+        : `Merger: ${view.names[mg.who]} is deciding about their ${view.chains[mg.chain].name} shares`;
+    } else if (mg && view.phase === 'review') {
+      status = ask ? 'Merger done — check everyone’s choices and tap OK' : 'Waiting for everyone to tap OK';
     } else if (myTurn) {
-      status = { place: 'Your turn — place a tile', found: 'You founded a chain! Pick which one', survivor: 'Tie! Pick which chain survives', buy: 'Buy up to 3 shares' }[view.phase];
+      status = { place: 'Your turn — place a tile', found: 'You founded a chain! Pick which one', survivor: 'Tie! Pick which chain stays on the board', buy: 'Buy up to 3 shares' }[view.phase];
     } else {
-      status = `${view.names[view.turn]} is ${{ place: 'placing a tile', found: 'founding a chain', survivor: 'choosing a survivor', buy: 'buying shares' }[view.phase] || 'playing'}`;
+      status = `${view.names[view.turn]} is ${{ place: 'placing a tile', found: 'founding a chain', survivor: 'choosing which chain stays', buy: 'buying shares' }[view.phase] || 'playing'}`;
     }
-    root.append(el('p', 'status' + (myTurn || (ask && ask.who === view.seat) ? ' mine' : ''), status));
+    root.append(el('p', 'status' + (myTurn || ask ? ' mine' : ''), status));
 
     // Board
     const handSet = new Map((view.hand || []).map((h) => [h.t, h]));
@@ -520,6 +594,50 @@ const game = {
       board.append(cell);
     });
     root.append(board);
+
+    // Merger announcement: bonuses, then each shareholder's choice, for everyone to see.
+    if (mg) {
+      const box = el('section', 'mh-merger');
+      box.append(el('h3', '', ''));
+      box.lastChild.append(line('Merger: ', { c: mg.chain }, ` (${mg.size} tiles) comes off — `, { c: mg.survivor }, ' stays'));
+      box.append(el('p', 'note', `${who(mg.merger)} made the merger. ${view.chains[mg.chain].name} shares are worth ${money(mg.price)} each.`
+        + (mg.more ? ` ${mg.more} more chain${mg.more > 1 ? 's' : ''} to merge after this one.` : '')));
+      box.append(el('h4', '', 'Bonuses paid'));
+      const bl = el('ul', '');
+      if (!mg.bonuses.length) bl.append(el('li', '', 'No one held shares'));
+      mg.bonuses.forEach((b) => bl.append(el('li', '', `${b.seats.map(who).join(' & ')} — ${b.kind}: ${money(b.each)}${b.seats.length > 1 ? ' each' : ''}`)));
+      box.append(bl);
+      box.append(el('h4', '', 'Shareholders’ choices'));
+      const cl = el('ul', 'mh-choices-list');
+      mg.deciders.forEach((seat, k) => {
+        const ch = mg.choices[k];
+        let text;
+        if (ch) {
+          text = [ch.sell ? `sold ${ch.sell} (+${money(ch.cash)})` : null, ch.trade ? `traded ${ch.trade} for ${ch.trade / 2} ${view.chains[mg.survivor].name}` : null,
+            ch.kept ? `kept ${ch.kept}` : null].filter(Boolean).join(', ') + (ch.skipped ? ' (skipped by host)' : '');
+        } else text = seat === mg.who ? 'deciding now…' : 'waiting…';
+        const li = el('li', ch ? '' : seat === mg.who ? 'now' : 'later');
+        li.append(el('strong', '', who(seat) + ': '), text);
+        cl.append(li);
+      });
+      box.append(cl);
+      if (view.phase === 'dispose' && view.seat === 0 && mg.who !== 0) {
+        box.append(btn(`${view.names[mg.who]} is away? Skip — they keep their shares`, 'quiet', () => {
+          if (confirm(`Skip ${view.names[mg.who]}? They keep all their ${view.chains[mg.chain].name} shares.`)) send({ type: 'skipDecision' });
+        }));
+      }
+      if (view.phase === 'review') {
+        const waiting = view.names.map((_, i) => i).filter((i) => !mg.acks.includes(i));
+        box.append(el('p', 'note', waiting.length ? `Waiting for OK from: ${waiting.map(who).join(', ')}` : ''));
+        const row = el('div', 'row');
+        if (ask && ask.type === 'review') row.append(btn('OK', 'primary', () => send({ type: 'ok' })));
+        if (view.seat === 0 && waiting.length && !(ask && ask.type === 'review')) {
+          row.append(btn('Continue without waiting', 'quiet', () => send({ type: 'continue' })));
+        }
+        if (row.childNodes.length) box.append(row);
+      }
+      root.append(box);
+    }
 
     // Actions
     const act = el('section', 'mh-act');
@@ -551,50 +669,84 @@ const game = {
       });
       act.append(row);
     } else if (myTurn && view.phase === 'survivor') {
+      act.append(el('p', 'note', 'These chains are the same size. Pick the one that stays on the board and grows; the other comes off.'));
       const row = el('div', 'mh-choices');
       ask.tied.forEach((c) => {
         const b = btn('', 'mh-choice', () => send({ type: 'survivor', chain: c }));
-        b.append(chip(c), el('small', '', `${view.chains[c].size} tiles`));
+        b.append(chip(c), el('small', '', `${view.chains[c].size} tiles — keep this one`));
         row.append(b);
       });
       act.append(row);
-    } else if (ask && ask.type === 'dispose' && ask.who === view.seat) {
-      const d = (ui.dispose = ui.dispose && ui.dispose.key === `${ask.chain}` ? ui.dispose : { key: `${ask.chain}`, sell: 0, trade: 0 });
-      const maxTrade = Math.min(ask.held - d.sell - ((ask.held - d.sell) % 2), ask.survivorBank * 2);
-      const keep = ask.held - d.sell - d.trade;
+    } else if (ask && ask.type === 'dispose') {
+      if (!ui.dispose || ui.dispose.chain !== ask.chain || ui.dispose.held !== ask.held) ui.dispose = { chain: ask.chain, held: ask.held, sell: 0, trade: 0 };
+      const d = ui.dispose;
+      const canTradeMore = d.sell + d.trade + 2 <= ask.held && (d.trade + 2) / 2 <= ask.survivorBank;
       const stepper = (labelText, value, dec, inc, decOK, incOK) => {
         const r = el('div', 'mh-step');
         r.append(el('span', '', labelText), btn('−', '', dec, !decOK), el('strong', '', String(value)), btn('+', '', inc, !incOK));
         return r;
       };
-      act.append(el('p', 'note', `You hold ${ask.held} ${view.chains[ask.chain].name} share${ask.held > 1 ? 's' : ''}. Sell at ${money(ask.price)} each, or trade 2 for 1 ${view.chains[ask.survivor].name}.`));
+      act.append(el('p', 'note', `You hold ${ask.held} ${view.chains[ask.chain].name} share${ask.held > 1 ? 's' : ''}. Sell for ${money(ask.price)} each, trade 2 for 1 ${view.chains[ask.survivor].name} (${ask.survivorBank} left), or keep them in case ${view.chains[ask.chain].name} comes back.`));
       act.append(stepper('Sell', d.sell, () => { d.sell--; redraw(); }, () => { d.sell++; redraw(); }, d.sell > 0, d.sell + d.trade < ask.held));
-      act.append(stepper('Trade', d.trade, () => { d.trade -= 2; redraw(); }, () => { d.trade += 2; redraw(); }, d.trade > 0, d.trade + 2 <= maxTrade + 0 && d.sell + d.trade + 2 <= ask.held && (d.trade + 2) / 2 <= ask.survivorBank));
-      act.append(el('p', 'note', `Keep ${keep}${d.sell ? ` · +${money(d.sell * ask.price)}` : ''}${d.trade ? ` · get ${d.trade / 2} ${view.chains[ask.survivor].name}` : ''}`));
+      act.append(stepper('Trade', d.trade, () => { d.trade -= 2; redraw(); }, () => { d.trade += 2; redraw(); }, d.trade > 0, canTradeMore));
+      const keep = ask.held - d.sell - d.trade;
+      act.append(el('p', 'note', `Keep ${keep}${d.sell ? ` · get ${money(d.sell * ask.price)}` : ''}${d.trade ? ` · get ${d.trade / 2} ${view.chains[ask.survivor].name}` : ''}`));
       act.append(btn('Done', 'primary', () => send({ type: 'dispose', sell: d.sell, trade: d.trade })));
-    } else if (myTurn && view.phase === 'buy') {
-      const active = view.chains.filter((c) => c.active);
-      const total = Object.values(ui.buys).reduce((a, b) => a + b, 0);
-      const cost = active.reduce((sum, c) => sum + (ui.buys[c.c] || 0) * c.price, 0);
-      if (!active.length) act.append(el('p', 'note', 'No chains on the board yet.'));
-      active.forEach((c) => {
-        const q = ui.buys[c.c] || 0;
-        const r = el('div', 'mh-step');
-        const name = el('span', '');
-        name.append(chip(c.c), ` ${money(c.price)} · ${c.bank} left`);
-        r.append(name,
-          btn('−', '', () => { ui.buys[c.c] = q - 1; redraw(); }, q <= 0),
-          el('strong', '', String(q)),
-          btn('+', '', () => { ui.buys[c.c] = q + 1; redraw(); }, total >= 3 || q >= c.bank || cost + c.price > view.me.cash));
-        act.append(r);
-      });
-      act.append(el('p', 'note', `${total} of 3 · cost ${money(cost)} · you have ${money(view.me.cash)}`));
-      act.append(btn(total ? `Buy for ${money(cost)} and end turn` : 'Buy nothing and end turn', 'primary', () => send({ type: 'buy', buys: { ...ui.buys } })));
-    }
-    if (myTurn && view.canEnd && ['place', 'buy'].includes(view.phase)) {
-      act.append(btn('End the game now', 'quiet mh-end', () => { if (confirm('End the game now? Final bonuses are paid and all shares are sold.')) send({ type: 'end' }); }));
     }
     if (act.childNodes.length) root.append(act);
+
+    // Final results
+    if (view.phase === 'over' && view.final) {
+      const box = el('section', 'mh-final');
+      box.append(el('h3', '', 'Final cash'));
+      const ol = el('ol', '');
+      view.final.forEach((f) => ol.append(el('li', view.winner.includes(f.seat) ? 'win' : '', `${view.names[f.seat]} — ${money(f.cash)}`)));
+      box.append(ol);
+      root.append(box);
+    }
+
+    // Hotels: size, price, shares left, what you own — and buying, all in one place.
+    const buying = myTurn && view.phase === 'buy';
+    const total = Object.values(ui.buys).reduce((a, b) => a + b, 0);
+    const cost = view.chains.reduce((sum, c) => sum + (ui.buys[c.c] || 0) * c.price, 0);
+    const hotels = el('section', 'mh-hotels' + (buying ? ' buying' : ''));
+    const hdr = el('div', 'mh-row mh-hdr');
+    ['Hotel', 'Size', 'Price', 'Left', 'You'].forEach((t) => hdr.append(el('span', '', t)));
+    if (buying) hdr.append(el('span', 'mh-buycol', 'Buy'));
+    hotels.append(hdr);
+    view.chains.forEach((c) => {
+      const row = el('div', 'mh-row' + (c.active ? '' : ' off'));
+      const name = el('span', 'mh-name');
+      name.append(chip(c.c));
+      if (c.safe) name.append(el('small', 'mh-safe', 'safe'));
+      row.append(name, el('span', '', c.active ? String(c.size) : '—'), el('span', '', money(c.price)), el('span', '', String(c.bank)),
+        el('span', 'mine', player ? String(view.me.shares[c.c] || 0) : '—'));
+      if (buying) {
+        const q = ui.buys[c.c] || 0;
+        const st = el('span', 'mh-buy');
+        if (c.active) {
+          st.append(
+            btn('−', '', () => { ui.buys[c.c] = q - 1; redraw(); }, q <= 0),
+            el('strong', '', String(q)),
+            btn('+', '', () => { ui.buys[c.c] = q + 1; redraw(); }, total >= 3 || q >= c.bank || cost + c.price > view.me.cash));
+        }
+        row.append(st);
+      }
+      hotels.append(row);
+      if (view.open) {
+        const others = view.others.map((o, i) => (i !== view.seat && o.shares && o.shares[c.c] ? `${view.names[i]} ${o.shares[c.c]}` : null)).filter(Boolean);
+        if (others.length) hotels.append(el('div', 'mh-others', others.join(' · ')));
+      }
+    });
+    if (buying) {
+      hotels.append(el('p', 'note mh-total', `${total} of 3 · cost ${money(cost)} · you have ${money(view.me.cash)}`));
+      hotels.append(btn(total ? `Buy for ${money(cost)} and end turn` : 'Buy nothing and end turn', 'primary', () => send({ type: 'buy', buys: { ...ui.buys } })));
+    }
+    if (myTurn && view.canEnd && ['place', 'buy'].includes(view.phase)) {
+      hotels.append(btn('End the game now', 'quiet mh-end', () => { if (confirm('End the game now? Final bonuses are paid and all shares are sold.')) send({ type: 'end' }); }));
+    }
+    root.append(hotels);
+    root.append(el('p', 'note', `${view.bag} tiles left to draw`));
 
     // Last round: who placed, founded and bought what, oldest first.
     if (view.rounds && view.rounds.length) {
@@ -615,36 +767,6 @@ const game = {
       box.append(ol);
       root.append(box);
     }
-
-    // Final results
-    if (view.phase === 'over' && view.final) {
-      const box = el('section', 'mh-final');
-      box.append(el('h3', '', 'Final cash'));
-      const ol = el('ol', '');
-      view.final.forEach((f) => ol.append(el('li', view.winner.includes(f.seat) ? 'win' : '', `${view.names[f.seat]} — ${money(f.cash)}`)));
-      box.append(ol);
-      root.append(box);
-    }
-
-    // Chains table
-    const table = el('table', 'mh-table');
-    const thead = el('tr', '');
-    ['Chain', 'Size', 'Price', 'Left', ...(player ? ['You'] : [])].forEach((t) => thead.append(el('th', '', t)));
-    if (view.open) view.names.forEach((nm, i) => { if (i !== view.seat) thead.append(el('th', '', nm.slice(0, 6))); });
-    table.append(thead);
-    view.chains.forEach((c) => {
-      const tr = el('tr', c.active ? '' : 'off');
-      const td = el('td', '');
-      td.append(chip(c.c), c.safe ? el('small', 'mh-safe', ' safe') : '');
-      tr.append(td, el('td', '', c.active ? String(c.size) : '—'), el('td', '', money(c.price)), el('td', '', String(c.bank)));
-      if (player) tr.append(el('td', 'mine', String(view.me.shares[c.c] || 0)));
-      if (view.open) view.others.forEach((o, i) => { if (i !== view.seat) tr.append(el('td', '', o.shares ? String(o.shares[c.c]) : '')); });
-      table.append(tr);
-    });
-    const wrap = el('div', 'mh-table-wrap');
-    wrap.append(table);
-    root.append(wrap);
-    root.append(el('p', 'note', `${view.bag} tiles left to draw`));
 
     const log = el('ul', 'log');
     view.log.forEach((l) => log.append(el('li', '', l)));
@@ -679,12 +801,26 @@ button.mh-cell { cursor: pointer; }
 .mh-step strong { text-align: center; font-size: 1.1rem; }
 .mh-step button { padding: 0; min-height: 2.4rem; font-size: 1.2rem; }
 .mh-end { justify-self: start; }
-.mh-table-wrap { overflow-x: auto; }
-.mh-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-.mh-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 0.25rem 0.3rem; white-space: nowrap; }
-.mh-table td { padding: 0.25rem 0.3rem; border-top: 1px solid var(--felt-line); white-space: nowrap; }
-.mh-table tr.off td { opacity: 0.55; }
-.mh-table td.mine { font-weight: 700; color: var(--brass); }
+.mh-hotels { display: grid; gap: 0.15rem; margin: 0.3rem 0 0.4rem; font-size: 0.86rem; }
+.mh-row { display: grid; grid-template-columns: minmax(5.8rem, 1.6fr) 2.1rem 3.1rem 1.9rem 1.9rem; align-items: center; gap: 0.3rem; padding: 0.2rem 0; border-top: 1px solid var(--felt-line); }
+.mh-hotels.buying .mh-row { grid-template-columns: minmax(5.4rem, 1.5fr) 1.8rem 2.9rem 1.7rem 1.7rem 6.4rem; }
+.mh-row.mh-hdr { border-top: none; color: var(--muted); font-weight: 600; font-size: 0.78rem; }
+.mh-row.off > span:not(.mh-buy) { opacity: 0.5; }
+.mh-row .mine { font-weight: 700; color: var(--brass); }
+.mh-name { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.mh-buy { display: grid; grid-template-columns: 2rem 1.6rem 2rem; align-items: center; gap: 0.2rem; }
+.mh-buy button { padding: 0; min-height: 2.1rem; font-size: 1.1rem; }
+.mh-buy strong { text-align: center; }
+.mh-buycol { text-align: center; }
+.mh-others { color: var(--muted); font-size: 0.78rem; padding: 0 0 0.2rem 0.3rem; }
+.mh-total { margin-top: 0.4rem; }
+.mh-merger { border: 1.5px solid var(--brass); border-radius: 12px; padding: 0.5rem 0.8rem 0.7rem; margin: 0.2rem 0 0.8rem; background: rgba(212, 173, 58, 0.07); }
+.mh-merger h3 { margin: 0.1rem 0 0.3rem; font-size: 1rem; line-height: 1.7; }
+.mh-merger h4 { margin: 0.6rem 0 0.2rem; font-size: 0.9rem; color: var(--muted); }
+.mh-merger ul { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; }
+.mh-merger li.now { color: var(--brass); }
+.mh-merger li.later { color: var(--muted); }
+.mh-merger .row { margin-top: 0.6rem; }
 .mh-safe { color: var(--brass); font-weight: 700; }
 .mh-round { margin: 0.2rem 0 0.8rem; }
 .mh-round h3 { margin: 0.2rem 0 0.4rem; font-size: 1rem; }
